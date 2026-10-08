@@ -1,0 +1,50 @@
+Hustle HQ — Commercial License
+Copyright (c) 2026 BOF Studios. All rights reserved.
+
+This software and its associated files (the "Software") are proprietary and
+confidential. The Software is licensed, not sold.
+
+1. LICENSE GRANT
+   A person or company that has purchased a license from BOF Studios or an
+   authorized reseller (the "Licensee") may install and use the Software on
+   computers they own or control, for their own personal or internal business
+   purposes, under the terms of their purchase.
+
+2. RESTRICTIONS
+   The Licensee may not, without prior written permission from BOF Studios:
+   (a) copy, publish, share, sell, sublicense, rent or otherwise distribute the
+       Software or any part of it, modified or unmodified;
+   (b) make the Software available to third parties as a hosted or managed
+       service;
+   (c) remove or alter any copyright or license notices.
+   Modifying the Software for the Licensee's own internal use is permitted.
+
+3. THIRD-PARTY SERVICES
+   The Software can connect to third-party AI providers and services that the
+   Licensee configures with their own accounts and API keys (for example
+   OpenRouter, Google Gemini, Groq, Z.ai, Lemon Squeezy, Yahoo Finance). Use
+   of those services is governed by their own terms, and any costs or limits
+   are the Licensee's responsibility.
+
+4. NO FINANCIAL OR PROFESSIONAL ADVICE; NO INCOME GUARANTEE
+   The Software does not transfer money, does not place real trades and does
+   not guarantee any income. The trading desk is a simulation only and is not
+   investment advice. AI-generated output may be inaccurate and must be
+   reviewed by the Licensee before use. The Licensee is solely responsible for
+   what they approve, publish, purchase or execute, and for complying with all
+   applicable laws and platform policies.
+
+5. DISCLAIMER OF WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+6. LIMITATION OF LIABILITY
+   IN NO EVENT SHALL BOF STUDIOS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE, INCLUDING LOSS
+   OF DATA, REVENUE OR PROFITS.
+
+7. TERMINATION
+   This license terminates automatically if the Licensee breaches its terms.
+   Upon termination the Licensee must stop using and delete the Software.

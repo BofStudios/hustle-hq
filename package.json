@@ -1,0 +1,23 @@
+{
+  "name": "hustle-hq",
+  "version": "1.0.0",
+  "description": "Pixel-art AI office: 10 always-on AI employees on free models. Make money or get fired.",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "check": "node scripts/policy-test.js && node scripts/check.js",
+    "smoke": "node scripts/smoke.js",
+    "test": "node scripts/policy-test.js && node scripts/check.js && node scripts/smoke.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "private": true,
+  "author": "BOF Studios"
+}

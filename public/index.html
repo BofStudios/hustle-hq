@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hustle HQ</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23e05a2b'/><rect x='3' y='3' width='4' height='4' fill='%23fff'/><rect x='9' y='9' width='4' height='4' fill='%23fff'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <header id="hud">
+    <div class="hud-left">
+      <div class="logo"><span class="logo-mark"></span><span id="company-name">HUSTLE HQ</span></div>
+      <div class="stat" title="Kasa (defter bakiyesi)"><span class="k">KASA</span><span class="v" id="hud-cash">0</span></div>
+      <div class="stat" title="Toplam gerçek gelir"><span class="k">GELİR</span><span class="v green" id="hud-rev">0</span></div>
+      <div class="stat" title="Çalışan / uyuyan / kovulan"><span class="k">EKİP</span><span class="v" id="hud-team">-</span></div>
+    </div>
+    <nav class="menu" id="menu">
+      <button data-open="boss" title="B"><i>🎯</i><span>Hedef Ver</span></button>
+      <button data-open="engines"><i>⚙️</i><span>Motorlar</span></button>
+      <button data-open="character"><i>🧍</i><span>Karakterim</span></button>
+      <button data-open="people"><i>👥</i><span>Kişiler</span></button>
+      <button data-open="tasks" title="Tab"><i>📋</i><span>Görevler</span></button>
+      <button data-open="decisions"><i>📜</i><span>Kararlar</span></button>
+      <button data-open="deliverables"><i>📦</i><span>Teslimler</span></button>
+      <button data-open="files"><i>🗂️</i><span>Dosyalar</span></button>
+      <button data-open="approvals" title="Q"><i>📥</i><span>Onaylar</span><b class="badge" id="badge-approvals" hidden>0</b></button>
+      <button data-open="cash"><i>🏦</i><span>Kasa</span></button>
+      <button data-open="market"><i>📈</i><span>Borsa</span></button>
+      <button data-open="claude"><i>⚡</i><span>Claude</span></button>
+      <button data-open="settings"><i>🛠️</i><span>Yönetim</span></button>
+    </nav>
+    <div class="hud-right">
+      <button id="sound-btn" class="icon-btn" title="Ses aç/kapa">🔊</button>
+      <div id="mode-badge" class="mode demo">DEMO</div>
+      <div id="prov-lights" title="Motor durumu"></div>
+      <div id="clock">--:--</div>
+    </div>
+  </header>
+
+  <div id="goal-bar" hidden><span>🎯</span><b id="goal-text"></b></div>
+  <div id="feed"></div>
+  <div id="hint">WASD / Oklar: yürü · Shift: koş · E: etkileşim · Tıkla: git/konuş · F: ajanı takip · Tab: görevler · B: hedef · Q: onaylar · 1-0: ajana ışınlan · +/-: yakınlaş · M: harita</div>
+
+  <aside id="drawer" hidden>
+    <div class="drawer-head"><h2 id="drawer-title"></h2><button class="x" data-action="close">✕</button></div>
+    <div id="drawer-body"></div>
+  </aside>
+
+  <div id="modal" hidden></div>
+  <div id="toasts"></div>
+  <div id="offline" hidden>Sunucuya bağlanılıyor…</div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
