@@ -1,10 +1,24 @@
 // Oyun dünyası: render, kamera, oyuncu, ajan görsel davranışları, robot/köpek, ışık, efektler.
 import { T, W, H, floor, wall, FLOOR, furniture, DESKS, seatOf, POI, SPAWN, BOSS_SEAT, findPath, collides, walkable, isWall, ROOMS, roomAt, roomById, roomBounds, WINDOWS } from './map.js';
-import { character, FURN, dog, robot, ghost, shade, PAL } from './sprites.js';
+import { character, FURN, dog, robot, ghost, shade, PAL, cat } from './sprites.js';
 import { S, on, api } from './net.js';
-import { sfx, setAmbience } from './sound.js';
-import { tr } from './i18n.js';
+import { sfx, setAmbience, setWeatherSound } from './sound.js';
+import { tr, getLang } from './i18n.js';
 import { employeeOfMonth } from './ui.js';
+import {
+  initLife, updateLife, lifeDrawables, lifeOverlay, drawWeatherWorld, drawWeatherScreen, windowWeather, skyExtras,
+  npcNear, talkNpc, spawnCustomer, moneyRun, pizzaRun, period, birthdayAgent as bdayRaw, weather, weatherIcon, stats as lifeStats,
+} from './life.js';
+
+// doğum günü kontrolü her karede çağrılır; saniyede bir hesapla
+let bdayCache = { t: 0, a: null };
+function birthdayAgent() {
+  const now = performance.now();
+  if (now - bdayCache.t > 1000) bdayCache = { t: now, a: bdayRaw() };
+  return bdayCache.a;
+}
+
+const L = (tr0, en) => (getLang() === 'en' ? en : tr0);
 
 const FONT = "'Silkscreen', 'Courier New', monospace";
 let cv, ctx, staticLayer, lightCv, lightCtx;
@@ -54,30 +68,60 @@ function elevatorRide() {
   enterRoom(roomAt(dst.x, dst.y));
 }
 
-// ---- Undertale diyalog kutusu
-const dialog = { open: false, agentId: null, text: '', shown: 0, sel: 0, blipAcc: 0, pitch: 520 };
-const DIALOG_OPTS = [['Konuş', 'chat'], ['Görev ver', 'task'], ['Panel', 'log'], ['Kapat', null]];
+// ---- Undertale diyalog kutusu (ajanlar, NPC'ler, ATM, kedi). Seçenekler {label, fn}: fn bir sonraki
+// ekranı ({text, opts}) döndürebilir (Promise de olabilir); döndürmezse kutu kapanır.
+const dialog = { open: false, kind: 'agent', agentId: null, npc: null, anchor: null, text: '', shown: 0, sel: 0, pitch: 520, opts: [], busy: false };
 function lastLine(id) {
   const logs = S.logs.get(id) || [];
   for (let i = logs.length - 1; i >= 0; i--) if (logs[i].kind === 'thought' || logs[i].kind === 'say') return logs[i].text;
   return '';
 }
+const OK = () => [{ label: L('Tamam', 'OK') }];
+function agentOpts(a) {
+  const id = a.id;
+  if (a.status === 'dead') return [{ label: L('Kapat', 'Close') }];
+  const o = [];
+  if (a.role === 'claude') o.push({ label: L('İş ver', 'Give job'), fn: () => hooks.openAgent?.(id, 'claude') });
+  else {
+    o.push({ label: L('Konuş', 'Talk'), fn: () => hooks.openAgent?.(id, 'chat') });
+    o.push({ label: L('Görev', 'Task'), fn: () => hooks.openAgent?.(id, 'task') });
+    o.push({ label: L('Bütçe', 'Budget'), fn: () => budgetMenu(id) });
+    o.push(player.holding === 'coffee' ? { label: L('Kahve ver', 'Give coffee'), fn: () => giveTreat(id, 'coffee') } : { label: L('Övgü', 'Praise'), fn: () => giveTreat(id, 'praise') });
+  }
+  o.push({ label: 'Panel', fn: () => hooks.openAgent?.(id, 'log') });
+  o.push({ label: L('Kapat', 'Close') });
+  return o;
+}
 function openDialog(id) {
   const a = S.agents.get(id);
   if (!a) return;
   const v = vis.get(id);
-  const m = v ? moodOf(a, v, performance.now()) : 'neutral';
+  const now = performance.now();
+  const m = v ? moodOf(a, v, now) : 'neutral';
   const ll = lastLine(id).replace(/\s+/g, ' ').slice(0, 110);
   let t;
   if (a.status === 'dead') t = `* Burada eskiden ${a.name} otururdu.\n* Masada yarım kalmış bir kahve var.`;
   else if (a.role === 'claude') t = `* ${a.name} sakin sakin bekliyor.\n* "Beni çağırırsan gerçek kod yazarım, patron."`;
   else if (a.status === 'sleeping') t = `* ${a.name} kanepede uyuyor. Zzz...\n* (Motorlarının kotası dolmuş.)`;
+  else if (v?.mode === 'nap' || (v?.dozeUntil || 0) > now) t = L(`* ${a.name} uyukluyor. Zzz...\n* (Gece vardiyası, işi yokken dinleniyor.)`, `* ${a.name} is dozing. Zzz...\n* (Night shift, resting while idle.)`);
+  else if (v?.mode === 'eat') t = L(`* ${a.name} ağzı dolu konuşuyor.\n* "Mmf! Patron, sen de bir dilim al!"`, `* ${a.name} talks with a full mouth.\n* "Mmf! Boss, grab a slice!"`);
+  else if (v?.mode === 'party') t = L(`* ${a.name} müziğin ritmine kapılmış.\n* "Cuma akşamı patron! Bu hafta çok çalıştık!"`, `* ${a.name} is dancing to the beat.\n* "It's Friday, boss! We worked hard this week!"`);
   else if (m === 'panic') t = `* ${a.name} titriyor, terden sırılsıklam.\n* "${ll || 'AAAA! Runway bitiyor patron!'}"`;
   else if (m === 'stress') t = `* ${a.name} ekrana kilitlenmiş, alnında ter var.\n* "${ll || 'Bir saniye patron, yetiştiriyorum!'}"`;
   else if (a.status === 'working' || a.status === 'thinking') t = `* ${a.name} hızlı hızlı yazıyor.\n* "${ll || 'Üzerinde çalışıyorum!'}"`;
   else t = `* ${a.name} sana dönüyor.\n* "${ll || 'Patron! Bugün ne satıyoruz?'}"`;
+  t = tr(t);
+  if (a.role !== 'claude' && a.status !== 'dead' && (a.budget || 0) > 0) t += L(`\n* (Bütçesi: ${fmtN(a.budget)} ${curr()})`, `\n* (Budget: ${fmtN(a.budget)} ${curr()})`);
+  if (birthdayAgent()?.id === id) t += L('\n* Bugün doğum günü! 🎂', "\n* It's their birthday today! 🎂");
+  showDialog({ kind: 'agent', agentId: id, text: t, opts: agentOpts(a), pitch: 380 + ((a.slot || 0) * 47) % 380 });
+}
+function showDialog(d) {
   document.body.classList.add('dlg');
-  Object.assign(dialog, { open: true, agentId: id, text: tr(t), shown: 0, sel: 0, blipAcc: 0, pitch: 380 + ((a.slot || 0) * 47) % 380 });
+  Object.assign(dialog, { open: true, npc: null, anchor: null, shown: 0, sel: 0, busy: false, pitch: 520, at: performance.now() }, d);
+}
+/** NPC / nesne diyaloğu: npc = { kind: 'char'|'atm'|'cat', look, name, anchor:{x,y} } */
+export function openNpcDialog(npc, text, opts) {
+  showDialog({ kind: 'npc', agentId: null, npc, anchor: npc.anchor || { x: player.x, y: player.y }, text, opts: opts || [{ label: L('Kapat', 'Close') }], pitch: npc.kind === 'cat' ? 900 : npc.kind === 'atm' ? 700 : 460 });
 }
 function closeDialog() {
   dialog.open = false;
@@ -86,16 +130,29 @@ function closeDialog() {
 function dialogKey(k) {
   const full = dialog.shown >= dialog.text.length;
   if (k === 'escape' || k === 'x' || k === 'shift') return closeDialog();
-  if (k === 'arrowleft' || k === 'a') { dialog.sel = (dialog.sel + DIALOG_OPTS.length - 1) % DIALOG_OPTS.length; sfx.select(); return; }
-  if (k === 'arrowright' || k === 'd') { dialog.sel = (dialog.sel + 1) % DIALOG_OPTS.length; sfx.select(); return; }
+  if (dialog.busy) return;
+  const n = dialog.opts.length;
+  if (k === 'arrowleft' || k === 'a' || k === 'arrowup' || k === 'w') { dialog.sel = (dialog.sel + n - 1) % n; sfx.select(); return; }
+  if (k === 'arrowright' || k === 'd' || k === 'arrowdown' || k === 's') { dialog.sel = (dialog.sel + 1) % n; sfx.select(); return; }
   if (k === 'e' || k === 'enter' || k === 'z' || k === ' ') {
+    if (performance.now() - (dialog.at || 0) < 250) return; // aynı basışın tekrarı ekranı atlamasın
     if (!full) { dialog.shown = dialog.text.length; return; }
-    const [, tab] = DIALOG_OPTS[dialog.sel];
-    sfx.select();
-    const id = dialog.agentId;
-    closeDialog();
-    if (tab) hooks.openAgent?.(id, tab);
+    chooseOpt(dialog.opts[dialog.sel]);
   }
+}
+async function chooseOpt(opt) {
+  sfx.select();
+  if (!opt?.fn) return closeDialog();
+  const keep = { agentId: dialog.agentId, npc: dialog.npc, anchor: dialog.anchor };
+  let r;
+  try {
+    dialog.busy = true;
+    r = opt.fn();
+    if (r?.then) { dialog.text = '* ...'; dialog.shown = 5; r = await r; }
+  } catch (e) { r = { text: `* ${e.message}`, opts: OK() }; }
+  dialog.busy = false;
+  if (r?.text && dialog.open) Object.assign(dialog, { text: tr(r.text), opts: r.opts || OK(), shown: 0, sel: 0, at: performance.now() }, keep);
+  else closeDialog();
 }
 function updateDialog(dt) {
   if (!dialog.open) return;
@@ -106,16 +163,16 @@ function updateDialog(dt) {
     for (let i = before; i < after; i++) if (i % 2 === 0 && /\S/.test(dialog.text[i])) sfx.blip(dialog.pitch);
   }
   // uzaklaşırsa kapanır
-  const v = vis.get(dialog.agentId);
-  if (!v || Math.hypot(player.x - v.x, player.y - v.y) > 60) closeDialog();
+  const v = dialog.agentId ? vis.get(dialog.agentId) : dialog.anchor;
+  if (!v || Math.hypot(player.x - v.x, player.y - v.y) > 64) closeDialog();
 }
 function drawDialog() {
   if (!dialog.open) return;
-  const a = S.agents.get(dialog.agentId);
-  if (!a) return;
+  const a = dialog.agentId ? S.agents.get(dialog.agentId) : null;
+  if (dialog.agentId && !a) return;
   const dpr = cv.width / cv.clientWidth;
   const W2 = cv.width, H2 = cv.height;
-  const bw = Math.min(W2 - 40 * dpr, 900 * dpr), bh = 170 * dpr;
+  const bw = Math.min(W2 - 40 * dpr, 900 * dpr), bh = 178 * dpr;
   const bx = (W2 - bw) / 2, by = H2 - bh - H2 * 0.06 - 18 * dpr;
   ctx.fillStyle = '#000';
   ctx.fillRect(bx, by, bw, bh);
@@ -123,24 +180,31 @@ function drawDialog() {
   ctx.lineWidth = 5 * dpr;
   ctx.strokeRect(bx + 2.5 * dpr, by + 2.5 * dpr, bw - 5 * dpr, bh - 5 * dpr);
   // portre (kafa, büyük piksel)
-  const v = vis.get(dialog.agentId);
-  const mood = v ? moodOf(a, v, performance.now()) : 'neutral';
   const talking = dialog.shown < dialog.text.length && Math.floor(performance.now() / 120) % 2;
-  const spr = a.status === 'dead' ? ghost(0) : character(a.look, 0, 0, 'stand', false, talking && mood === 'neutral' ? 'happy' : mood);
+  let spr, sw = 16, sh = 16;
+  if (a) {
+    const v = vis.get(dialog.agentId);
+    const mood = v ? moodOf(a, v, performance.now()) : 'neutral';
+    spr = a.status === 'dead' ? ghost(0) : character(a.look, 0, 0, 'stand', false, talking && mood === 'neutral' ? 'happy' : mood);
+  } else if (dialog.npc?.kind === 'atm') { spr = FURN.atm(); sw = 18; sh = 32; }
+  else if (dialog.npc?.kind === 'cat') { spr = cat(Math.floor(performance.now() / 300) % 2, 'sit'); sw = 16; sh = 12; }
+  else spr = character(dialog.npc?.look || {}, 0, 0, 'stand', false, talking ? 'happy' : 'neutral');
   const ps = Math.floor(7 * dpr);
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(spr, 0, 0, 16, 16, bx + 22 * dpr, by + 22 * dpr, 16 * ps / 1.25, 16 * ps / 1.25);
+  const pw = (16 * ps) / 1.25;
+  const scale = pw / Math.max(sw, sh);
+  ctx.drawImage(spr, 0, 0, sw, sh, bx + 22 * dpr + (pw - sw * scale) / 2, by + 22 * dpr + (pw - sh * scale) / 2, sw * scale, sh * scale);
   // metin
-  const tx = bx + 22 * dpr + (16 * ps) / 1.25 + 24 * dpr;
-  const fs = Math.round(17 * dpr);
+  const tx = bx + 22 * dpr + pw + 24 * dpr;
+  const fs = Math.round(Math.min(17 * dpr, bw / 40));
   ctx.font = `bold ${fs}px ${FONT}`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillStyle = '#fff';
   const shown = dialog.text.slice(0, Math.floor(dialog.shown));
   const maxW = bx + bw - tx - 24 * dpr;
-  let line = '', y = by + 24 * dpr;
-  const flush = () => { ctx.fillText(line, tx, y); y += fs * 1.45; line = ''; };
+  let line = '', y = by + 22 * dpr;
+  const flush = () => { ctx.fillText(line, tx, y); y += fs * 1.4; line = ''; };
   for (const para of shown.split('\n')) {
     for (const word of para.split(' ')) {
       const test = line ? line + ' ' + word : word;
@@ -148,23 +212,145 @@ function drawDialog() {
     }
     flush();
   }
-  // seçenekler (❤ imleç)
-  if (dialog.shown >= dialog.text.length) {
-    const oy = by + bh - 34 * dpr;
-    const ow = (bw - 40 * dpr) / DIALOG_OPTS.length;
-    DIALOG_OPTS.forEach(([label], i) => {
-      const ox = bx + 20 * dpr + i * ow + 26 * dpr;
-      const on = i === dialog.sel;
-      ctx.fillStyle = on ? '#ffde3d' : '#fff';
-      ctx.font = `bold ${Math.round(15 * dpr)}px ${FONT}`;
-      ctx.fillText(tr(label).toUpperCase(), ox, oy);
-      if (on) {
-        ctx.fillStyle = '#ff2a2a';
-        ctx.font = `${Math.round(15 * dpr)}px sans-serif`;
-        ctx.fillText('❤', ox - 22 * dpr, oy - 1 * dpr);
+  // seçenekler (❤ imleç), sığmazsa ikinci satıra
+  if (dialog.shown >= dialog.text.length && !dialog.busy) {
+    const ofs = Math.round(Math.min(15 * dpr, bw / 46));
+    ctx.font = `bold ${ofs}px ${FONT}`;
+    const labels = dialog.opts.map((o) => tr(o.label).toUpperCase());
+    const gap = 30 * dpr;
+    const widths = labels.map((l) => ctx.measureText(l).width + gap + 22 * dpr);
+    const rows = [[]];
+    let rw = 0;
+    const avail = bw - 40 * dpr;
+    widths.forEach((w, i) => { if (rw + w > avail && rows.at(-1).length) { rows.push([]); rw = 0; } rows.at(-1).push(i); rw += w; });
+    rows.forEach((row, ri) => {
+      let ox = bx + 20 * dpr + 26 * dpr;
+      const oy = by + bh - (rows.length - ri) * (ofs * 1.7) - 8 * dpr;
+      for (const i of row) {
+        const on = i === dialog.sel;
+        ctx.fillStyle = on ? '#ffde3d' : '#fff';
+        ctx.font = `bold ${ofs}px ${FONT}`;
+        ctx.fillText(labels[i], ox, oy);
+        if (on) {
+          ctx.fillStyle = '#ff2a2a';
+          ctx.font = `${ofs}px sans-serif`;
+          ctx.fillText('❤', ox - 22 * dpr, oy - 1 * dpr);
+        }
+        ox += widths[i];
       }
     });
   }
+}
+
+// ---- patron dünyada: bütçe ver, kahve/övgü, ATM
+const fmtN = (n) => Math.round(Number(n) || 0).toLocaleString(getLang() === 'en' ? 'en-US' : 'tr-TR');
+const curr = () => S.company?.currency || '₺';
+const pickOne = (arr) => arr[Math.floor(Math.random() * arr.length)];
+function freeBalance() {
+  if (S.ledger.free != null) return S.ledger.free;
+  let alloc = 0;
+  for (const a of S.agents.values()) if (a.status !== 'dead') alloc += a.budget || 0;
+  return (S.ledger.balance || 0) - alloc;
+}
+function niceSteps(free) {
+  const NICE = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000, 50000, 100000];
+  const out = [];
+  for (const f of [0.1, 0.25, 0.5]) {
+    const target = free * f;
+    const n = [...NICE].reverse().find((x) => x <= target);
+    if (n && !out.includes(n)) out.push(n);
+  }
+  if (!out.length && free >= 1) out.push(Math.floor(free));
+  return out;
+}
+function budgetMenu(id) {
+  const a = S.agents.get(id);
+  if (!a) return null;
+  const free = Math.floor(freeBalance());
+  const opts = niceSteps(free).map((n) => ({ label: `+${fmtN(n)}`, fn: () => giveBudget(id, n) }));
+  if ((a.budget || 0) > 0) opts.push({ label: L('Geri al', 'Take back'), fn: () => giveBudget(id, -a.budget) });
+  if (!opts.length) return { text: L(`* Kasada serbest bakiye yok (${fmtN(free)} ${curr()}).\n* Lobideki ATM'den bakiye yükle, sonra gel.`, `* No free balance in the treasury (${fmtN(free)} ${curr()}).\n* Top up at the lobby ATM, then come back.`), opts: OK() };
+  opts.push({ label: L('Vazgeç', 'Cancel') });
+  return {
+    text: L(`* ${a.name}'in bütçesi: ${fmtN(a.budget)} ${curr()}. Kasada serbest: ${fmtN(free)} ${curr()}.\n* Ne kadar ayırıyorsun? (Ajan bununla harcama ÖNERİR, ödemeyi sen yaparsın.)`, `* ${a.name}'s budget: ${fmtN(a.budget)} ${curr()}. Free in treasury: ${fmtN(free)} ${curr()}.\n* How much do you allocate? (They PROPOSE spends with it; you pay.)`),
+    opts,
+  };
+}
+async function giveBudget(id, n) {
+  const a = S.agents.get(id);
+  const r = await api('POST', `/api/agents/${id}/budget`, { amount: n, inPerson: true });
+  const v = vis.get(id);
+  if (v && n > 0) {
+    coinArc(player.x, player.y - 16, v.x, v.y - 18, 10);
+    v.happyUntil = performance.now() + 6000;
+    v.hopUntil = performance.now() + 1500;
+    v.hopPhase = 0;
+    sfx.give();
+    setTimeout(() => sfx.money(), 350);
+  }
+  say(id, n > 0 ? pickOne(L(['Sağ ol patron! 💼', 'Bu parayı akıllıca kullanacağım!', 'Reklam zamanı! 📢', 'Güvenine layık olacağım 🙏'], ['Thanks boss! 💼', "I'll spend it wisely!", 'Ad time! 📢', "I won't let you down 🙏"])) : L('Anlaşıldı patron…', 'Understood, boss…'), 3500);
+  return {
+    text: n > 0
+      ? L(`* ${fmtN(n)} ${curr()} ayırdın. Yeni bütçe: ${fmtN(r.budget)} ${curr()}.\n* ${a?.name}: "Getirisini göstereceğim patron!"`, `* You allocated ${fmtN(n)} ${curr()}. New budget: ${fmtN(r.budget)} ${curr()}.\n* ${a?.name}: "I'll show you the return, boss!"`)
+      : L(`* Bütçeyi geri aldın. Kasaya döndü.\n* ${a?.name}: "Peki patron…"`, `* You took the budget back. It returned to the treasury.\n* ${a?.name}: "Okay, boss…"`),
+    opts: OK(),
+  };
+}
+async function giveTreat(id, kind) {
+  const a = S.agents.get(id);
+  const r = await api('POST', `/api/agents/${id}/treat`, { kind });
+  if (!r.ok) return { text: `* ${r.text}`, opts: OK() };
+  const v = vis.get(id);
+  if (kind === 'coffee') player.holding = null;
+  if (v) v.happyUntil = performance.now() + 8000;
+  sfx.give();
+  return kind === 'coffee'
+    ? { text: L(`* ${a?.name} kahveyi aldı.\n* "Ooo! Tam ihtiyacım vardı, sağ ol patron ☕" (stres ↓)`, `* ${a?.name} takes the coffee.\n* "Ooh! Just what I needed, thanks boss ☕" (stress ↓)`), opts: OK() }
+    : { text: L(`* "İyi iş çıkarıyorsun ${a?.name}!"\n* ${a?.name} gururla gülümsüyor. (+XP, stres ↓)`, `* "You're doing great, ${a?.name}!"\n* ${a?.name} smiles proudly. (+XP, stress ↓)`), opts: OK() };
+}
+function hearts(x, y, n) {
+  for (let i = 0; i < n; i++) fx.push({ kind: 'heart', x: x + (Math.random() - 0.5) * 12, y, vx: (Math.random() - 0.5) * 10, vy: -18 - Math.random() * 10, grav: 0, t: 0, life: 1.6 });
+}
+function atmPresets() {
+  return /^(₺|TL|TRY)$/i.test(curr()) ? [100, 500, 1000, 5000] : [10, 50, 100, 500];
+}
+function openAtm() {
+  sfx.atmBeep();
+  const free = freeBalance();
+  const alloc = (S.ledger.balance || 0) - free;
+  const opts = atmPresets().map((n) => ({ label: `+${fmtN(n)}`, fn: () => ({
+    text: L(`* ${fmtN(n)} ${curr()} yükleme deftere kaydedilsin mi?\n* (Önce bu parayı kendi hesabında bu işe ayır. Sistem para çekmez.)`, `* Record a ${fmtN(n)} ${curr()} top-up in the ledger?\n* (Set this money aside in your own account first. The system never takes money.)`),
+    opts: [{ label: L('Evet', 'Yes'), fn: () => atmTopUp(n) }, { label: L('Hayır', 'No') }],
+  }) }));
+  opts.push({ label: L('Cüzdan', 'Wallet'), fn: () => hooks.open?.('wallet') }, { label: L('Kapat', 'Close') });
+  const f = furniture.find((x) => x.kind === 'atm');
+  openNpcDialog({ kind: 'atm', name: 'ATM', anchor: { x: f.x + 8, y: f.y + 30 } }, L(
+    `* HUSTLE BANK · ATM\n* Kasa ${fmtN(S.ledger.balance)} · Serbest ${fmtN(free)} · Ajanlarda ${fmtN(alloc)} ${curr()}\n* (Bu bir kayıt defteri. Gerçek para senin bankanda kalır.)`,
+    `* HUSTLE BANK · ATM\n* Treasury ${fmtN(S.ledger.balance)} · Free ${fmtN(free)} · With agents ${fmtN(alloc)} ${curr()}\n* (This is a ledger. Real money stays in your bank.)`), opts);
+}
+let atmReceiptUntil = 0;
+async function atmTopUp(n) {
+  await api('POST', '/api/wallet/topup', { amount: n, method: 'atm', note: L('ATM yüklemesi', 'ATM top-up') });
+  sfx.atmBeep();
+  setTimeout(() => sfx.kaching(), 300);
+  const f = furniture.find((x) => x.kind === 'atm');
+  for (let i = 0; i < 18; i++) fx.push({ kind: 'coin', x: f.x + 8 + (Math.random() - 0.5) * 10, y: f.y + 4, vx: (Math.random() - 0.5) * 50, vy: -50 - Math.random() * 40, t: 0, life: 1.4 });
+  fx.push({ kind: 'text', x: f.x + 8, y: f.y - 6, text: `+${fmtN(n)} ${curr()}`, color: '#ffd700', t: 0, life: 2.2, big: true });
+  atmReceiptUntil = performance.now() + 2500;
+  return { text: L(`* Fiş yazdırılıyor... ✔\n* Kasaya ${fmtN(n)} ${curr()} eklendi. Ajanlara bütçe vermek için yanlarına git (E → Bütçe).`, `* Printing receipt... ✔\n* ${fmtN(n)} ${curr()} added. Walk up to an agent to give them budget (E → Budget).`), opts: OK() };
+}
+
+/** Oyuncudan ajana uçan altın paralar. */
+function coinArc(x0, y0, x1, y1, n = 8) {
+  for (let i = 0; i < n; i++) fx.push({ kind: 'arc', x: x0, y: y0, x0, y0, x1, y1, t: -i * 0.06, life: 0.7 });
+}
+
+/** Ekranın üstünde Undertale tarzı olay duyurusu. */
+const announceQ = [];
+export function announce(text) {
+  if (!text) return;
+  announceQ.push({ text: tr(text), t: 0 });
+  if (announceQ.length > 3) announceQ.shift();
 }
 
 // ---- kamera takip modu (F veya ajan panelindeki 🎥): oyuncu yerinde kalır, kamera ajanı izler
@@ -284,6 +470,11 @@ export function initWorld(canvas, h) {
     v.x = POI.elevator.x * T + 8; v.y = POI.elevator.y * T + 12;
     goTo(v, s.tx, s.ty, 'seat');
     say(p.agent.id, `Merhaba! Ben ${p.agent.name}, ilk günüm 👋`, 6000);
+  });
+  on('party', onParty);
+  initLife({
+    ctx: () => ctx, room: () => room, bounds: () => roomBounds(room), inRoom: (x, y) => inRoom(x, y), player,
+    drawSprite, shadow, pill, text, bubble, announce, openNpcDialog, safeBurst, reduceFx: () => reduceFx,
   });
   pollPortfolio();
   setInterval(pollPortfolio, 60000);
@@ -470,8 +661,10 @@ function onKeyDown(e) {
   const k = e.key.toLowerCase();
   if (dialog.open) {
     e.preventDefault();
+    if (e.repeat) return; // basılı tutulan tuş seçenekleri art arda onaylamasın
     return dialogKey(k);
   }
+  if (e.repeat && (k === 'e' || k === 'enter')) return;
   keys.add(k);
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'tab'].includes(k)) e.preventDefault();
   if (k === 'e' || k === 'enter') interact();
@@ -544,9 +737,12 @@ function nearestInteract() {
   for (const [id, v] of vis) {
     if (!inRoom(v.x, v.y)) continue;
     const d = Math.hypot(player.x - v.x, player.y - v.y);
-    if (d < 42 && d < bestD) { bestD = d; best = { type: 'agent', id, label: `${S.agents.get(id)?.name || ''} ile konuş` }; }
+    if (d < 42 && d < bestD) { bestD = d; best = { type: 'agent', id, label: player.holding === 'coffee' ? L(`${S.agents.get(id)?.name || ''}'e kahve ver`, `Give ${S.agents.get(id)?.name || ''} coffee`) : `${S.agents.get(id)?.name || ''} ile konuş` }; }
   }
+  const npc = npcNear(player.x, player.y);
+  if (npc && !best) { best = npc; bestD = 30; }
   const ptx = player.x / T, pty = player.y / T;
+  if (room.id === 'kitchen' && birthdayAgent() && Math.hypot(ptx - 22.5, pty - 43.5) < 2 && 20 < bestD) { bestD = 20; best = { type: 'obj', id: 'cake', label: L('Doğum günü pastası', 'Birthday cake') }; }
   for (const f of furniture) {
     if (!f.interact || f.room !== room.id) continue;
     const d = Math.hypot(ptx - (f.interact.tx + 0.5), pty - (f.interact.ty + 0.5));
@@ -559,9 +755,23 @@ function interact() {
   const n = nearestInteract();
   if (!n) return;
   if (n.type === 'agent') openDialog(n.id);
+  else if (n.type === 'npc') talkNpc(n.id);
   else if (n.id === 'coffee') {
-    hooks.toast?.('☕ Kahve içtin. Ekip seni izliyor, gaza geldiler.');
-    fx.push({ kind: 'text', x: player.x, y: player.y - 30, text: '☕ +enerji', color: '#ffd28a', t: 0, life: 1.5 });
+    if (player.holding === 'coffee') {
+      player.holding = null;
+      hooks.toast?.(L('☕ Kahveyi kendin içtin. Enerji tavan!', '☕ You drank it yourself. Energy maxed!'));
+      fx.push({ kind: 'text', x: player.x, y: player.y - 30, text: '☕ +enerji', color: '#ffd28a', t: 0, life: 1.5 });
+    } else {
+      player.holding = 'coffee';
+      sfx.give();
+      hooks.toast?.(L('☕ Elinde sıcak bir kahve var. Bir ajana götür (E → Kahve ver). Stresi düşer.', '☕ You have a hot coffee. Bring it to an agent (E → Give coffee). Lowers stress.'));
+    }
+  } else if (n.id === 'atm') openAtm();
+  else if (n.id === 'cake') {
+    const b = birthdayAgent();
+    hooks.toast?.(L(`🎂 Pastadan bir dilim aldın. İyi ki doğdun ${b?.name || ''}!`, `🎂 You took a slice. Happy birthday ${b?.name || ''}!`));
+    if (b) { const v = vis.get(b.id); if (v) { hearts(v.x, v.y - 26, 5); say(b.id, L('Teşekkürler patron! 🥳', 'Thanks boss! 🥳'), 3000); } }
+    sfx.party();
   } else if (n.id === 'elevator') elevatorRide();
   else if (n.id === 'telescope') {
     const a = [...S.agents.values()];
@@ -634,6 +844,148 @@ function goTo(v, tx, ty, mode, wait = 0, after = null) {
   v.wait = wait;
   v.after = after;
   return true;
+}
+
+// Çatı ayrı bir bölge: ajanlar asansörle iner/çıkar (ding + kapı).
+const ROOF_Y = 67;
+function travel(v, tx, ty, mode, wait = 0, after = null) {
+  const fromRoof = v.y / T >= ROOF_Y, toRoof = ty >= ROOF_Y;
+  if (fromRoof === toRoof) return goTo(v, tx, ty, mode, wait, after);
+  const [a, b] = fromRoof ? [POI.roofElevator, POI.elevator] : [POI.elevator, POI.roofElevator];
+  return goTo(v, a.x, a.y, 'transit', 0, () => {
+    if (inRoom(v.x, v.y)) { sfx.ding(); fx.push({ kind: 'text', x: v.x, y: v.y - 30, text: '▲▼', color: '#ffd23f', t: 0, life: 1 }); }
+    v.x = b.x * T + 8;
+    v.y = b.y * T + 12;
+    if (inRoom(v.x, v.y)) sfx.ding();
+    if (!goTo(v, tx, ty, mode, wait, after)) v.mode = 'transit';
+  });
+}
+const AWAY = new Set(['visit', 'wander', 'eat', 'nap', 'party', 'transit']);
+const seatTaken = new Map(); // ajan → yemek sandalyesi
+function freeLunchSeat(id) {
+  const used = new Set([...seatTaken.entries()].filter(([k]) => k !== id).map(([, i]) => i));
+  const free = POI.lunch.map((_, i) => i).filter((i) => !used.has(i));
+  const i = free.length ? free[Math.floor(Math.random() * free.length)] : Math.floor(Math.random() * POI.lunch.length);
+  seatTaken.set(id, i);
+  return POI.lunch[i];
+}
+function goEat(a, v, wait, line) {
+  const s = freeLunchSeat(a.id);
+  return travel(v, s.x, s.y, 'eat', wait, () => { v.face = s.dir; v.eatDir = s.dir; if (line) say(a.id, line, 3000); });
+}
+
+/** Boşta kalan ajan günün saatine göre ne yapar: kahve, öğle yemeği, çay, uyuklama, çatı partisi, sohbet. */
+function idleOuting(a, v, now) {
+  const p = period();
+  const r = Math.random();
+  const bday = birthdayAgent();
+  const h = new Date().getHours() + new Date().getMinutes() / 60;
+  if (bday && h >= 15 && h < 15.75 && r < 0.7) return goEat(a, v, 40000 + Math.random() * 30000, a.id === bday.id ? L('Bana mı pasta?! 🥹', 'Cake for me?! 🥹') : L(`İyi ki doğdun ${bday.name}! 🎂`, `Happy birthday ${bday.name}! 🎂`));
+  switch (p) {
+    case 'night':
+      if (r < 0.4) { const c = sleepSpotFor(a.id); return travel(v, c.x, c.y, 'nap', 120000 + Math.random() * 240000, () => { v.face = 0; }); }
+      if (r < 0.75) { v.dozeUntil = now + 60000 + Math.random() * 150000; return; }
+      break;
+    case 'morning':
+      if (r < 0.6) { const d = POI.coffee[Math.floor(Math.random() * POI.coffee.length)]; return travel(v, d.x, d.y, 'wander', 6000 + Math.random() * 6000, () => say(a.id, pickOne(L(['Günaydın ☀️', 'Kahvesiz başlamam ☕', 'Bugün satış günü!', 'Gece kim çalıştı? 👀'], ['Morning ☀️', 'No coffee, no code ☕', 'Sales day today!', 'Who worked last night? 👀'])), 3200)); }
+      break;
+    case 'lunch':
+      if (r < 0.75) return goEat(a, v, 60000 + Math.random() * 60000, pickOne(L(['Afiyet olsun! 🍜', 'Bugün menüde ne var?', 'Yemekte iş konuşmak yok 😄'], ['Bon appétit! 🍜', "What's on the menu?", 'No work talk at lunch 😄'])));
+      break;
+    case 'tea':
+      if (r < 0.5) return goEat(a, v, 30000 + Math.random() * 30000, L('Çaylar benden ☕', 'Tea is on me ☕'));
+      break;
+    case 'party':
+      if (r < 0.65) { const s = POI.roofParty[Math.floor(Math.random() * POI.roofParty.length)]; return travel(v, s.x, s.y, 'party', 90000 + Math.random() * 150000, () => say(a.id, pickOne(L(['Cuma partisi! 🎉', 'Bu hafta çok çalıştık 🥳', 'Izgarada ne var? 🍢', 'Manzara efsane 🌆'], ['Friday party! 🎉', 'We worked hard this week 🥳', "What's on the grill? 🍢", 'What a view 🌆'])), 3500)); }
+      break;
+    case 'evening':
+      if (r < 0.5) { const kinds = ['pingpong', 'aquarium', 'couch']; const pool = POI[kinds[Math.floor(Math.random() * kinds.length)]]; const d = pool[Math.floor(Math.random() * pool.length)]; return travel(v, d.x, d.y, 'wander', 15000 + Math.random() * 20000, () => say(a.id, pickOne(L(['Biraz kafa dağıtayım', 'Ping-pong? 🏓', 'Akşamları ofis bir başka'], ['Time to unwind', 'Ping-pong? 🏓', 'The office feels different at night'])), 3000)); }
+      break;
+  }
+  if (r < 0.3 && startChat(a, v)) return;
+  if (r < 0.65) {
+    const kinds = ['coffee', 'water', 'vending', 'printer', 'window', 'pingpong', 'aquarium'];
+    const pool = POI[kinds[Math.floor(Math.random() * kinds.length)]];
+    const dst = pool[Math.floor(Math.random() * pool.length)];
+    travel(v, dst.x, dst.y, 'wander', 5000 + Math.random() * 7000, () => {
+      if (Math.random() < 0.5) say(a.id, ((a.stress || 0) > 60 ? ['Nefes al… nefes ver…', 'Kovulmayacağım, kovulmayacağım', 'Bir kahve daha lazım ☕', 'Runway’e bakamıyorum 😰'] : ['☕ Kahve molası', 'Fikir lazım…', 'Bugün satış çıkacak', 'Biraz hava…', 'Ping-pong? 🏓'])[Math.floor(Math.random() * 4)], 3500);
+    });
+  }
+}
+
+// ---- su başı sohbeti: en yakın arkadaşıyla buluşur, gerçek şirket verisinden dedikodu yapar
+function gossip(a, b) {
+  const c = curr();
+  const bal = S.ledger.balance || 0, rev = S.ledger.revenue || 0;
+  const eom = employeeOfMonth();
+  const dead = S.graveyard.at(-1);
+  const goal = S.company?.goal?.text;
+  const T0 = [];
+  T0.push(rev > 0
+    ? [L(`Gelir ${fmtN(rev)} ${c} oldu, duydun mu?`, `Revenue hit ${fmtN(rev)} ${c}, did you hear?`), L('Duydum! Patron mutludur şimdi 😎', 'I did! The boss must be happy 😎')]
+    : [L(`Kasa ${fmtN(bal)} ${c}… ilk satış ne zaman?`, `Treasury is ${fmtN(bal)} ${c}… when's the first sale?`), L('Bu hafta olacak, hissediyorum 🤞', "This week, I can feel it 🤞")]);
+  if (eom && eom.id !== a.id) T0.push([L(`Ayın çalışanı yine ${eom.name} 🙄`, `${eom.name} is employee of the month again 🙄`), eom.id === b.id ? L('Ehem… o benim 😎', "Ahem… that's me 😎") : L('Hak ediyor ama, makine gibi.', 'Fair, they work like a machine.')]);
+  if (dead) T0.push([L(`${dead.name} gitti ya… masası hâlâ boş.`, `${dead.name} is gone… their desk is still empty.`), L('Sıra bize gelmesin, çalışalım.', "Let's work so we're not next.")]);
+  if (goal) T0.push([L(`Hedef: "${goal.slice(0, 28)}". Yetişir mi?`, `Goal: "${goal.slice(0, 28)}". Will we make it?`), L('Max planı yaptı, yetiştiririz.', 'Max has a plan, we will.')]);
+  if ((a.budget || 0) > 0) T0.push([L(`Patron bana ${fmtN(a.budget)} ${c} bütçe verdi 💼`, `The boss gave me ${fmtN(a.budget)} ${c} budget 💼`), L('Vay! Reklam mı açacaksın?', 'Whoa! Running ads?')]);
+  if (weather.kind === 'rain' || weather.kind === 'storm') T0.push([L('Dışarıda sağanak var ☔', "It's pouring outside ☔"), L('İyi ki ofisteyiz.', "Good thing we're inside.")]);
+  if (weather.kind === 'snow') T0.push([L('Kar yağıyor! ❄️', "It's snowing! ❄️"), L('Çıkışta kartopu? ⛄', 'Snowball fight later? ⛄')]);
+  T0.push([L('Patron bugün ofiste geziyor 👀', 'The boss is walking around today 👀'), L('Çalışıyormuş gibi yap!', 'Look busy!')]);
+  T0.push([L('Dün gece kodu kim kırdı? 😅', 'Who broke the build last night? 😅'), L('Bana bakma, QA’ya sor.', "Don't look at me, ask QA.")]);
+  const [x, y] = T0[Math.floor(Math.random() * T0.length)];
+  return [[a.id, x], [b.id, y], [a.id, pickOne(L(['Haha, haklısın.', 'Neyse, işe dönelim.', 'Kahve içelim mi sonra?'], ['Haha, true.', 'Anyway, back to work.', 'Coffee later?']))], [b.id, '👍']];
+}
+function startChat(a, v) {
+  const free = [...S.agents.values()].filter((b) => b.id !== a.id && b.status === 'idle' && b.role !== 'claude' && vis.get(b.id)?.mode === 'seat');
+  if (!free.length) return false;
+  free.sort((x, y) => (a.bonds?.[y.id] || 0) - (a.bonds?.[x.id] || 0) + (Math.random() - 0.5) * 3);
+  const b = free[0];
+  const bv = vis.get(b.id);
+  const [s0, s1] = POI.chat[Math.floor(Math.random() * POI.chat.length)];
+  const lines = gossip(a, b);
+  const both = { n: 0 };
+  const ready = () => {
+    if (++both.n < 2) return;
+    const now = performance.now();
+    v.waitUntil = bv.waitUntil = now + lines.length * 2300 + 1500;
+    lines.forEach(([id, t], i) => setTimeout(() => {
+      if (S.agents.get(id)?.status === 'dead') return;
+      say(id, t, 2400);
+      const vv = vis.get(id);
+      if (vv && inRoom(vv.x, vv.y)) sfx.blip(id === a.id ? 560 : 440);
+    }, i * 2300));
+  };
+  if (!travel(v, s0.x, s0.y, 'wander', 20000, () => { v.face = 3; ready(); })) return false;
+  travel(bv, s1.x, s1.y, 'wander', 20000, () => { bv.face = 2; ready(); });
+  return true;
+}
+
+// ---- pizza partisi: kurye gelir, herkes mutfağa
+let pizzaUntil = 0;
+function onParty(p) {
+  if (p.kind !== 'pizza') return;
+  sfx.party();
+  announce(L('🍕 Pizza partisi! Herkes mutfağa!', '🍕 Pizza party! Everyone to the kitchen!'));
+  pizzaRun(() => {
+    pizzaUntil = performance.now() + 20 * 60000;
+    if (room.id === 'kitchen') sfx.party();
+  });
+  let i = 0;
+  for (const a of S.agents.values()) {
+    if (a.status === 'dead' || a.status === 'sleeping') continue;
+    const v = ensureVis(a);
+    setTimeout(() => goEat(a, v, 80000 + Math.random() * 40000, pickOne(L(['Pizzaaa! 🍕', 'Patron ısmarladı! 🙌', 'Bana sucuklu!', 'En iyi patron 🏆'], ['Pizzaaa! 🍕', 'The boss is buying! 🙌', 'Pepperoni for me!', 'Best boss ever 🏆']))), 1500 + i++ * 700);
+  }
+}
+
+/** Kasada para efekti (bakiye yükleme/çekme, güvenlik görevlisi çantayı getirince). */
+function safeBurst(kind, amount) {
+  const f = furniture.find((x) => x.kind === 'safe');
+  if (!f) return;
+  const out = kind === 'withdraw';
+  for (let i = 0; i < 20; i++) fx.push({ kind: 'coin', x: f.x + 9 + (Math.random() - 0.5) * 12, y: f.y + 2, vx: (Math.random() - 0.5) * 60, vy: -50 - Math.random() * 50, t: 0, life: 1.5 });
+  fx.push({ kind: 'text', x: f.x + 9, y: f.y - 10, text: `${out ? '−' : '+'}${fmtN(amount)} ${curr()}`, color: out ? '#ff9b6b' : '#ffd700', t: 0, life: 2.5, big: true });
+  if (room.id === 'trade') sfx.kaching();
 }
 
 function frontOfDesk(role) {
@@ -752,6 +1104,26 @@ function onFx(p) {
     for (let i = 0; i < 24; i++) fx.push({ kind: 'coin', x: BOSS_SEAT.x + (Math.random() - 0.5) * 40, y: BOSS_SEAT.y - 20, vx: (Math.random() - 0.5) * 60, vy: -60 - Math.random() * 60, t: 0, life: 1.6 });
     fx.push({ kind: 'text', x: BOSS_SEAT.x, y: BOSS_SEAT.y - 40, text: `+${p.amount} ${S.company?.currency || '₺'}`, color: '#ffd700', t: 0, life: 2.5, big: true });
     celebrate();
+    spawnCustomer(p.amount);
+    return;
+  }
+  if (p.kind === 'deposit' || p.kind === 'withdraw') {
+    moneyRun(p.kind, p.amount);
+    hudPulse(p.kind);
+    announce(p.kind === 'deposit'
+      ? L(`🏦 Kasaya ${fmtN(p.amount)} ${curr()} kaydedildi. Zırhlı araç yolda!`, `🏦 ${fmtN(p.amount)} ${curr()} recorded. Armored van on the way!`)
+      : L(`🏧 ${fmtN(p.amount)} ${curr()} kâr çekildi. Afiyet olsun patron.`, `🏧 ${fmtN(p.amount)} ${curr()} profit withdrawn. Enjoy, boss.`));
+    return;
+  }
+  if (p.kind === 'budget') {
+    const a = S.agents.get(p.agentId);
+    if (a && p.amount > 0 && !p.inPerson) robotV.jobs.push({ fromPos: POI.safeFront, to: a.role, toId: a.id, cash: true });
+    if (a && p.amount < 0 && !p.inPerson) say(a.id, L('Bütçem geri alındı… 😕', 'My budget got pulled… 😕'), 3000);
+    return;
+  }
+  if (p.kind === 'treat') {
+    const v = vis.get(p.agentId);
+    if (v) { v.happyUntil = performance.now() + 8000; hearts(v.x, v.y - 26, 5); }
     return;
   }
   const v = vis.get(p.agentId);
@@ -820,27 +1192,29 @@ function updateAgents(dt, now) {
       v.y += (seat.y - 6 - v.y) * Math.min(1, dt * 2);
       continue;
     }
-    if (a.status !== 'sleeping') sleepSpots.delete(a.id);
+    if (a.status !== 'sleeping' && v.mode !== 'nap') sleepSpots.delete(a.id);
+
+    // görev geldiyse moladan (yemek, uyuklama, parti, sohbet) masaya dön
+    const busyNow = a.status === 'working' || a.status === 'thinking';
+    if (busyNow) v.dozeUntil = 0;
+    if (busyNow && AWAY.has(v.mode) && v.mode !== 'visit' && v.mode !== 'transit' && !v.recalled) {
+      v.recalled = true;
+      v.waitUntil = 0;
+      if (Math.random() < 0.6) say(a.id, pickOne(L(['Görev geldi, masama! 🏃', 'Tamam tamam, geliyorum!', 'İş başına!'], ['New task, back to my desk! 🏃', 'Coming, coming!', 'Back to work!'])), 2500);
+    }
 
     // istenen konum
-    if (v.mode !== 'walking' && v.mode !== 'visit' && v.mode !== 'wander') {
+    if (v.mode !== 'walking' && !AWAY.has(v.mode)) {
       if (a.status === 'sleeping') {
         const sp = sleepSpotFor(a.id);
         if (v.mode !== 'sleep') {
-          if (!goTo(v, sp.x, sp.y, 'sleep')) { v.mode = 'sleep'; }
+          if (!travel(v, sp.x, sp.y, 'sleep')) { v.mode = 'sleep'; }
         }
       } else if (v.mode !== 'seat') {
-        if (!goTo(v, seat.tx, seat.ty, 'seat')) { v.x = seat.x; v.y = seat.y; v.mode = 'seat'; }
+        if (!travel(v, seat.tx, seat.ty, 'seat')) { v.x = seat.x; v.y = seat.y; v.mode = 'seat'; }
       } else if (a.status === 'idle' && now > v.nextWander) {
-        v.nextWander = now + 25000 + Math.random() * 60000;
-        if (Math.random() < 0.55) {
-          const kinds = ['coffee', 'water', 'vending', 'printer', 'window', 'pingpong', 'aquarium'];
-          const pool = POI[kinds[Math.floor(Math.random() * kinds.length)]];
-          const dst = pool[Math.floor(Math.random() * pool.length)];
-          goTo(v, dst.x, dst.y, 'wander', 5000 + Math.random() * 7000, () => {
-            if (Math.random() < 0.5) say(a.id, ((a.stress || 0) > 60 ? ['Nefes al… nefes ver…', 'Kovulmayacağım, kovulmayacağım', 'Bir kahve daha lazım ☕', 'Runway’e bakamıyorum 😰'] : ['☕ Kahve molası', 'Fikir lazım…', 'Bugün satış çıkacak', 'Biraz hava…', 'Ping-pong? 🏓'])[Math.floor(Math.random() * 4)], 3500);
-          });
-        }
+        v.nextWander = now + 20000 + Math.random() * 45000;
+        if ((v.dozeUntil || 0) < now) idleOuting(a, v, now);
       }
     }
 
@@ -849,11 +1223,12 @@ function updateAgents(dt, now) {
       if (!v.path.length) {
         v.path = null;
         v.mode = v.next || 'seat';
-        if (v.mode === 'seat') { v.x = seat.x; v.y = seat.y; v.dir = 0; }
-        if (v.mode === 'sleep') { v.dir = 0; }
+        if (v.mode === 'seat') { v.x = seat.x; v.y = seat.y; v.dir = 0; v.face = null; v.recalled = false; seatTaken.delete(a.id); }
+        if (v.mode === 'sleep' || v.mode === 'nap') { v.dir = 0; }
         v.waitUntil = now + (v.wait || 0);
-        v.after?.();
+        const cb = v.after; // after yeni bir goTo başlatabilir (asansör); sıfırlamayı önce yap
         v.after = null;
+        cb?.();
         continue;
       }
       const [tx, ty] = v.path[0];
@@ -871,14 +1246,13 @@ function updateAgents(dt, now) {
       const nf = 1 + (Math.floor(v.animT * (stressed ? 12 : 8)) % 2);
       if (nf !== v.frame && inRoom(v.x, v.y)) dust(v.x, v.y, stressed ? 2 : 1);
       v.frame = nf;
-    } else if ((v.mode === 'visit' || v.mode === 'wander') && now > v.waitUntil) {
-      if (!goTo(v, seat.tx, seat.ty, 'seat')) { v.mode = 'seat'; v.x = seat.x; v.y = seat.y; }
+    } else if (AWAY.has(v.mode) && now > (v.waitUntil || 0)) {
+      if (!travel(v, seat.tx, seat.ty, 'seat')) { v.mode = 'seat'; v.x = seat.x; v.y = seat.y; }
     } else v.frame = 0;
 
-    if (v.mode === 'visit' || v.mode === 'wander') {
-      // ziyarette yüzünü hedefe dön
-      v.dir = v.mode === 'visit' ? (v.face ?? 1) : v.dir;
-    }
+    // ziyarette/sohbette/yemekte yüzünü hedefe dön
+    if (v.mode === 'visit') v.dir = v.face ?? 1;
+    else if (AWAY.has(v.mode) && v.face != null) v.dir = v.face;
   }
   for (const id of vis.keys()) if (!S.agents.has(id)) vis.delete(id);
 }
@@ -910,15 +1284,20 @@ function updateRobot(dt, now) {
       r.wait = now + 600;
     } else if (r.stage === 'toTarget') {
       r.carrying = false;
-      say(r.job.toId, '📨 Yeni görev geldi!', 3000);
+      if (r.job.cash) {
+        say(r.job.toId, L('Bütçe geldi! 💼 Teşekkürler patron!', 'Budget arrived! 💼 Thanks boss!'), 3500);
+        const tv = vis.get(r.job.toId);
+        if (tv) { tv.happyUntil = performance.now() + 6000; for (let i = 0; i < 10; i++) fx.push({ kind: 'coin', x: tv.x + (Math.random() - 0.5) * 10, y: tv.y - 20, vx: (Math.random() - 0.5) * 40, vy: -40 - Math.random() * 30, t: 0, life: 1.2 }); if (inRoom(tv.x, tv.y)) sfx.money(); }
+      } else say(r.job.toId, '📨 Yeni görev geldi!', 3000);
       r.stage = 'home';
       r.path = findPath(Math.floor(r.x / T), Math.floor((r.y - 4) / T), POI.robotDock.x, POI.robotDock.y)?.slice(1) || [];
       r.wait = now + 900;
     } else if (r.jobs.length) {
       r.job = r.jobs.shift();
-      r.stage = r.job.from ? 'toFrom' : 'toTarget';
-      r.carrying = !r.job.from;
-      const d = r.job.from ? frontOfDesk(r.job.from) : frontOfDesk(r.job.to);
+      const pre = r.job.fromPos || (r.job.from ? frontOfDesk(r.job.from) : null);
+      r.stage = pre ? 'toFrom' : 'toTarget';
+      r.carrying = !pre;
+      const d = pre || frontOfDesk(r.job.to);
       r.path = findPath(Math.floor(r.x / T), Math.floor((r.y - 4) / T), d.x, d.y)?.slice(1) || [];
     } else r.stage = null;
     return;
@@ -958,6 +1337,7 @@ function loop(now) {
   updateAgents(dt, now);
   updateRobot(dt, now);
   updateDog(dt, now);
+  updateLife(dt, now);
   for (const f of fx) {
     f.t += dt;
     if (f.vx != null) { f.x += f.vx * dt; f.y += f.vy * dt; f.vy += (f.grav ?? 140) * dt; }
@@ -974,7 +1354,10 @@ function loop(now) {
 let keyAcc = 0;
 let stepAcc = 0;
 function ambientSound(dt) {
-  if (!document.hidden) setAmbience(trans.phase === 'out' ? null : room.id);
+  if (!document.hidden) {
+    setAmbience(trans.phase === 'out' ? null : room.id);
+    setWeatherSound(weather.kind, !!room.outdoor);
+  }
   keyAcc += dt;
   if (keyAcc > 0.09) {
     keyAcc = 0;
@@ -1031,13 +1414,16 @@ function render(now) {
   for (const f of furniture) if (!f.flat && !f.wallMounted && f.room === room.id) list.push({ y: f.sortY ?? f.y + 16, draw: () => drawFurniture(f, now) });
   for (const [id, v] of vis) if (inRoom(v.x, v.y)) list.push({ y: v.mode === 'seat' ? v.y - 3 : v.y, draw: () => drawAgent(id, v, now) });
   list.push({ y: player.y, draw: drawPlayer });
-  if (inRoom(robotV.x, robotV.y)) list.push({ y: robotV.y, draw: () => { shadow(robotV.x, robotV.y, 6); drawSprite(robot(Math.floor(time * 4) % 2, robotV.carrying), robotV.x - 7, robotV.y - 19, robotV.flip); } });
+  if (inRoom(robotV.x, robotV.y)) list.push({ y: robotV.y, draw: () => { shadow(robotV.x, robotV.y, 6); drawSprite(robot(Math.floor(time * 4) % 2, robotV.carrying, !!robotV.job?.cash && robotV.carrying), robotV.x - 7, robotV.y - 19, robotV.flip); } });
   for (const c of traffic) list.push({ y: c.y + 26, draw: () => drawSprite(FURN.car(c.color), c.x, c.y, c.v < 0) });
   if (inRoom(dogV.x, dogV.y)) list.push({ y: dogV.y, draw: () => drawSprite(dog(dogV.frame, dogV.sleeping), dogV.x - 10, dogV.y - 11, dogV.flip) });
+  lifeDrawables(list, now);
+  if (room.id === 'kitchen') kitchenDrawables(list, now);
   list.sort((a, c) => a.y - c.y);
   for (const it of list) it.draw();
 
   for (const f of fx) if (inRoom(f.x, f.y) || f.global) drawFx(f);
+  drawWeatherWorld(now);
 
   // oda içi gölgelendirme: duvar diplerinde yumuşak karanlık (Undertale derinliği)
   roomShade(b);
@@ -1051,10 +1437,12 @@ function render(now) {
   ctx.rect(b.x - 40, b.y - 60, b.w + 80, b.h + 80);
   ctx.clip();
   for (const [id, v] of vis) if (inRoom(v.x, v.y)) drawAgentOverlay(id, v, now);
+  lifeOverlay(now);
   drawPlayerOverlay();
   ctx.restore();
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  drawWeatherScreen(cv.width, cv.height);
   screenEffects(b);
   if (minimapOn && !dialog.open) drawMinimap();
   drawDialog();
@@ -1138,6 +1526,34 @@ function screenEffects(b) {
     ctx.fillStyle = Math.floor(performance.now() / 500) % 2 ? '#ff3b3b' : '#fff';
     ctx.fillText(`● REC  ${a?.name || ''}`, W2 - 24 * dpr, base + 16 * dpr);
   }
+  // olay duyurusu (öğle arası, pizza, bakiye…)
+  if (announceQ.length) {
+    const an = announceQ[0];
+    const nowA = performance.now();
+    an.start ||= nowA;
+    const t = (nowA - an.start) / 1000;
+    if (t > 4.6) announceQ.shift();
+    else {
+      const dpr = cv.width / cv.clientWidth;
+      const fs = Math.round(Math.min(17 * dpr, W2 / 42));
+      ctx.font = `bold ${fs}px ${FONT}`;
+      const label = `* ${an.text}`;
+      const tw = Math.min(ctx.measureText(label).width, W2 - 60 * dpr);
+      const alpha = t < 0.25 ? t / 0.25 : t > 3.9 ? Math.max(0, 1 - (t - 3.9) / 0.7) : 1;
+      const x = (W2 - tw) / 2, y = base + 92 * dpr;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(x - 16 * dpr, y - fs, tw + 32 * dpr, fs * 2);
+      ctx.strokeStyle = '#ffde3d';
+      ctx.lineWidth = 3 * dpr;
+      ctx.strokeRect(x - 16 * dpr, y - fs, tw + 32 * dpr, fs * 2);
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label.slice(0, Math.floor(t * 45)), x, y, W2 - 60 * dpr);
+      ctx.globalAlpha = 1;
+    }
+  }
   // Undertale tarzı oda başlığı
   if (banner.t < 3.2) {
     const a = banner.t < 0.3 ? banner.t / 0.3 : banner.t > 2.5 ? Math.max(0, 1 - (banner.t - 2.5) / 0.7) : 1;
@@ -1220,10 +1636,11 @@ function drawWindow(x, y, w, night, now) {
       ctx.fillRect(x + i + 1, y + 1 + h - bh + 1, 1, 1);
     }
   }
-  if (night > 0.85) {
+  if (night > 0.85 && weather.kind === 'clear') {
     ctx.fillStyle = '#fff';
     for (let i = 3; i < w; i += 11) ctx.fillRect(x + i, y + 2 + ((i * 3) % 4), 1, 1);
   }
+  windowWeather(ctx, x, y + 1, w, h, now);
   // çerçeve
   ctx.fillStyle = '#e8e2d4';
   ctx.fillRect(x, y + 1 + h / 2, w, 1);
@@ -1265,6 +1682,19 @@ function drawFurniture(f, now) {
     case 'lamp': return drawSprite(FURN.lamp(), f.x + 3, f.y);
     case 'safe': return drawSprite(FURN.safe(), f.x, f.y);
     case 'elevator': return drawSprite(FURN.elevator(), f.x, f.y);
+    case 'atm': {
+      drawSprite(FURN.atm(), f.x - 1, f.y);
+      if (Math.floor(now / 500) % 2) { ctx.fillStyle = '#2ecc71'; ctx.fillRect(f.x + 11, f.y + 12, 2, 1); }
+      if (atmReceiptUntil > now) {
+        const k = 1 - (atmReceiptUntil - now) / 2500;
+        ctx.fillStyle = '#f4f1e8';
+        ctx.fillRect(f.x + 4, f.y + 27, 9, 2 + Math.min(1, k * 2) * 7);
+        ctx.fillStyle = '#9aa3b0';
+        for (let i = 0; i < 3; i++) ctx.fillRect(f.x + 5, f.y + 30 + i * 2, 6, 0.6);
+      }
+      return;
+    }
+    case 'billboard': return drawBillboard(f, now);
     case 'rack': return drawRack(f, now);
     case 'deskLabel': return drawDeskLabel(f);
     case 'whiteboard': return drawWhiteboard(f);
@@ -1649,6 +2079,44 @@ function drawNeon(f, now) {
   ctx.globalAlpha = 1;
 }
 
+function drawBillboard(f, now) {
+  const x = f.x, y = f.y, w = f.w, h = 20;
+  ctx.fillStyle = '#1a1420';
+  ctx.fillRect(x - 2, y - 2, w + 4, h + 4);
+  ctx.fillStyle = '#e05a2b';
+  ctx.fillRect(x - 2, y - 2, w + 4, 1);
+  ctx.fillStyle = '#060408';
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = 'rgba(255,138,80,0.06)';
+  for (let i = 0; i < w; i += 2) ctx.fillRect(x + i, y, 1, h);
+  const c = curr();
+  const eom = employeeOfMonth();
+  const msg = [
+    `${(S.company?.name || 'HUSTLE HQ').toUpperCase()}`,
+    `${L('KASA', 'TREASURY')} ${fmtN(S.ledger.balance)} ${c}`,
+    `${L('GELİR', 'REVENUE')} ${fmtN(S.ledger.revenue)} ${c}`,
+    eom ? `${L('AYIN ÇALIŞANI', 'EMPLOYEE OF THE MONTH')}: ${eom.name.toUpperCase()}` : '',
+    `${L('BUGÜN', 'TODAY')} ${lifeStats.customersToday} ${L('MÜŞTERİ', 'CUSTOMERS')}`,
+    `${weatherIcon(dayLight() > 0.5)} ${weather.temp}°`,
+  ].filter(Boolean).join('   ★   ');
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.font = `bold 8px ${FONT}`;
+  const tw = ctx.measureText(msg).width + 60;
+  const off = (now / 30) % tw;
+  ctx.shadowColor = '#ff5a2b';
+  ctx.shadowBlur = 4;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ff8a50';
+  ctx.fillText(msg, x + w - off, y + h / 2 + 1);
+  ctx.fillText(msg, x + w - off + tw, y + h / 2 + 1);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
 function drawFacadeWindow(f, now) {
   const x = f.x + 4, y = f.y + 2, w = 24, h = 11;
   ctx.fillStyle = '#4a2a22';
@@ -1686,6 +2154,7 @@ function drawSkyline(f, now) {
     ctx.fillRect(x + cx - 30, y + 6, 22, 4);
     ctx.fillRect(x + cx - 26, y + 3, 12, 4);
   }
+  skyExtras(ctx, x, y, w, h, night, now);
   for (let i = 0; i < w; i += 9) {
     const bh = 7 + ((i * 7 + 3) % 15);
     ctx.fillStyle = night > 0.5 ? '#141831' : '#7d8ca6';
@@ -1813,7 +2282,7 @@ function drawTicker(f, now) {
   let s = '';
   if (portfolio) {
     const pnl = portfolio.pnl;
-    s = `PORTFÖY ${portfolio.value.toFixed(0)} (${pnl >= 0 ? '▲' : '▼'}${pnl.toFixed(0)})   ` + portfolio.positions.map((p) => `${p.sym} ${p.price} ${p.pnl >= 0 ? '▲' : '▼'}`).join('   ') + '   ' + portfolio.watch.join(' · ');
+    s = `${L('PORTFÖY', 'PORTFOLIO')} ${portfolio.baseSymbol || ''}${portfolio.value.toFixed(0)} (${pnl >= 0 ? '▲' : '▼'}${pnl.toFixed(0)})   ` + portfolio.positions.map((p) => `${p.sym} ${p.price} ${p.pnl >= 0 ? '▲' : '▼'}`).join('   ') + '   ' + portfolio.watch.join(' · ');
   } else s = 'Fiyatlar yükleniyor…';
   tickerOff = (tickerOff + 0.25) % (s.length * 2.2 + w);
   ctx.save();
@@ -1831,9 +2300,9 @@ function drawTv(f) {
   ctx.fillStyle = '#10213a';
   ctx.fillRect(x, y, w, h);
   const cur = S.company?.currency || '₺';
-  text(`KASA ${Math.round(S.ledger.balance || 0)}${cur}`, x + w / 2, y + 3.5, 3, '#f1c40f', 'center', true);
-  text(`GELİR ${Math.round(S.ledger.revenue || 0)}${cur}`, x + w / 2, y + 7.5, 3, '#2ecc71', 'center', true);
-  text(S.demo ? 'DEMO MODU' : 'CANLI', x + w / 2, y + 11, 2.4, S.demo ? '#ff9f43' : '#46d4ff', 'center');
+  text(`${L('KASA', 'CASH')} ${Math.round(S.ledger.balance || 0)}${cur}`, x + w / 2, y + 3.5, 3, '#f1c40f', 'center', true);
+  text(`${L('GELİR', 'REVENUE')} ${Math.round(S.ledger.revenue || 0)}${cur}`, x + w / 2, y + 7.5, 3, '#2ecc71', 'center', true);
+  text(S.demo ? L('DEMO MODU', 'DEMO MODE') : L('CANLI', 'LIVE'), x + w / 2, y + 11, 2.4, S.demo ? '#ff9f43' : '#46d4ff', 'center');
 }
 
 function drawMemorial(f) {
@@ -1891,15 +2360,44 @@ function drawAgent(id, v, now) {
   else if (v.mode === 'seat') {
     dir = 0;
     dy = 3;
-    pose = a.status === 'working' && !((v.talkUntil || 0) > now) ? 'type' : a.status === 'sleeping' ? 'sleep' : 'sit';
-  } else if (v.mode === 'sleep') { pose = 'sleep'; dir = 0; dy = 2; }
+    const dozing = a.status === 'idle' && (v.dozeUntil || 0) > now;
+    pose = a.status === 'working' && !((v.talkUntil || 0) > now) ? 'type' : a.status === 'sleeping' || dozing ? 'sleep' : 'sit';
+  } else if (v.mode === 'sleep' || v.mode === 'nap') { pose = 'sleep'; dir = 0; dy = 2; }
+  else if (v.mode === 'party') {
+    dy -= Math.round(Math.abs(Math.sin(now / 160 + (v.animT % 6))) * 2);
+    dir = Math.floor(now / 420 + (a.slot || 0)) % 2 ? 2 : 3;
+    if (Math.floor(now / 840 + (a.slot || 0)) % 3 === 0) pose = 'panicArms'; // eller havada
+  } else if (v.mode === 'eat') dy -= Math.floor(now / 260 + (a.slot || 0)) % 2; // çiğneme
   if ((v.hopUntil || 0) > now && pose !== 'sleep') dy -= Math.round(Math.abs(Math.sin(now / 110 + v.hopPhase)) * 2);
   if (mood === 'panic' && (v.mode === 'visit' || v.mode === 'wander') && Math.floor(now / 450) % 2) pose = 'panicArms';
+  const happyParty = v.mode === 'party' ? 'happy' : null;
   const frame = pose === 'type' ? Math.floor(now / (mood === 'panic' ? 70 : mood === 'stress' ? 100 : 140)) % 2 : v.frame;
   const blink = v.blinkT < 0 && pose !== 'sleep';
   if (v.mode !== 'seat') shadow(v.x, v.y, 6);
-  const spr = character(lookKey(a), dir, frame, pose, blink, pose === 'sleep' ? 'neutral' : mood);
+  const spr = character(lookKey(a), dir, frame, pose, blink, pose === 'sleep' ? 'neutral' : happyParty || mood);
   drawSprite(spr, v.x - 8 + shake, v.y - 25 + dy);
+}
+
+/** Mutfak: yemek yiyenlerin tabakları, pizza kutuları, doğum günü pastası (masaların üstünde). */
+function kitchenDrawables(list, now) {
+  for (const [id, v] of vis) {
+    if (v.mode !== 'eat' || !inRoom(v.x, v.y)) continue;
+    const tableRow = v.eatDir === 0 ? Math.floor(v.y / T) + 1 : Math.floor(v.y / T) - 1;
+    const py = v.eatDir === 0 ? v.y + 6 : v.y - 15;
+    list.push({ y: tableRow * T + 15, draw: () => {
+      ctx.fillStyle = '#f4f1e8';
+      ctx.beginPath(); ctx.ellipse(v.x, py, 3.5, 1.6, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = pizzaUntil > now ? '#e0a23a' : ['#d4542a', '#3f8f4a', '#e0a23a'][Math.abs(v.x | 0) % 3];
+      ctx.fillRect(v.x - 2, py - 1, 4, 1.5);
+      if (Math.floor(now / 700 + v.x) % 4 === 0) { ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(v.x - 1 + Math.sin(now / 200) , py - 4 - ((now / 120) % 3), 1, 1); }
+    } });
+  }
+  const tables = [[21, 44], [28, 44], [21, 48], [28, 48]];
+  if (pizzaUntil > now) for (const [x, y] of tables) list.push({ y: y * T + 15, draw: () => { drawSprite(FURN.pizzaOpen(), x * T + 17, y * T - 2); drawSprite(FURN.pizzaBox(), x * T + 3, y * T - 1); } });
+  if (birthdayAgent()) list.push({ y: 44 * T + 16, draw: () => {
+    drawSprite(FURN.cake(), 22 * T + 1, 44 * T - 7);
+    if (Math.sin(now / 90) > 0) { ctx.fillStyle = '#fff3b0'; for (let i = 0; i < 3; i++) ctx.fillRect(22 * T + 4 + i * 4, 44 * T - 8, 1, 1); }
+  } });
 }
 
 /** Ruh hali: stres ve can ajanın yüzüne yansır. */
@@ -1922,6 +2420,10 @@ function stressEffects(dt, now) {
   for (const [id, v] of vis) {
     const a = S.agents.get(id);
     if (!a || a.status === 'dead' || !inRoom(v.x, v.y)) continue;
+    if (v.mode === 'nap' || v.mode === 'sleep' || (a.status === 'idle' && v.mode === 'seat' && (v.dozeUntil || 0) > now)) {
+      if (Math.random() < 0.35) fx.push({ kind: 'z', x: v.x + 4, y: v.y - 22, vx: 4, vy: -6, grav: 0, t: 0, life: 1.6 });
+      continue;
+    }
     const m = moodOf(a, v, now);
     if (m === 'stress' || m === 'panic') {
       if (Math.random() < (m === 'panic' ? 0.9 : 0.45)) fx.push({ kind: 'sweat', x: v.x + (Math.random() < 0.5 ? -6 : 5), y: v.y - 22 + (v.mode === 'seat' ? 3 : 0), vx: (Math.random() - 0.5) * 6, vy: -4, t: 0, life: 0.7, grav: 60 });
@@ -1939,6 +2441,18 @@ function drawPlayer() {
   shadow(player.x, player.y, 6);
   const spr = character(S.company.boss.look, player.dir, player.frame, player.moving ? 'walk' : 'stand', false, 'happy');
   drawSprite(spr, player.x - 8, player.y - 25);
+  if (player.holding === 'coffee' && player.dir !== 1) {
+    const now = performance.now();
+    const cx = player.x + (player.dir === 2 ? -8 : 5), cy = player.y - 12 - (player.frame ? 1 : 0);
+    ctx.fillStyle = '#f4f1e8';
+    ctx.fillRect(cx, cy, 3, 4);
+    ctx.fillStyle = '#6b4423';
+    ctx.fillRect(cx, cy, 3, 1);
+    ctx.fillStyle = '#e05a2b';
+    ctx.fillRect(cx, cy + 2, 3, 1);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillRect(cx + 1 + Math.round(Math.sin(now / 200)), cy - 2 - Math.floor((now / 150) % 3), 1, 1);
+  }
 }
 
 function hpColor(hp) {
@@ -2004,26 +2518,47 @@ function drawAgentOverlay(id, v, now) {
     ctx.textBaseline = 'middle';
     ctx.fillText(b, v.x + 7.5, by + 0.3);
   }
+  // doğum günü şapkası
+  if (a.status !== 'dead' && birthdayAgent()?.id === id) {
+    const hx = v.x, hy = headY + 1;
+    ctx.fillStyle = '#ff5d8f';
+    ctx.beginPath(); ctx.moveTo(hx - 3, hy); ctx.lineTo(hx + 3, hy); ctx.lineTo(hx, hy - 7); ctx.fill();
+    ctx.fillStyle = '#ffd23f';
+    ctx.fillRect(hx - 2.5, hy - 2, 5, 0.8);
+    ctx.fillRect(hx - 0.6, hy - 8, 1.2, 1.2);
+  }
   // konuşma balonu
   const sp = speech.get(id);
-  if (sp && sp.until > now && onScreen(v.x, v.y)) {
-    ctx.font = `4.2px ${FONT}`;
-    const words = sp.text.split(' ');
-    const lines = [];
-    let cur = '';
-    for (const wd of words) {
-      if ((cur + ' ' + wd).length > 22) { lines.push(cur); cur = wd; } else cur = cur ? cur + ' ' + wd : wd;
-    }
-    if (cur) lines.push(cur);
-    const ls = lines.slice(0, 3);
-    const bw = Math.max(...ls.map((l) => ctx.measureText(l).width)) + 6;
-    const bh = ls.length * 5.2 + 3;
-    const bx = v.x - bw / 2, by = headY - 12 - bh;
-    pill(bx, by, bw, bh, 'rgba(255,255,255,0.96)', '#2b2f3a');
-    ctx.fillStyle = 'rgba(255,255,255,0.96)';
-    ctx.beginPath(); ctx.moveTo(v.x - 2, by + bh); ctx.lineTo(v.x, by + bh + 3); ctx.lineTo(v.x + 2, by + bh); ctx.fill();
-    ls.forEach((l, i) => text(l, v.x, by + 4.1 + i * 5.2, 4.2, '#1d2230'));
-  } else if (sp && sp.until <= now) speech.delete(id);
+  if (sp && sp.until > now && onScreen(v.x, v.y)) bubble(v.x, headY, sp.text);
+  else if (sp && sp.until <= now) speech.delete(id);
+}
+
+function bubble(x, headY, str) {
+  ctx.font = `4.2px ${FONT}`;
+  const words = String(str).split(' ');
+  const lines = [];
+  let cur = '';
+  for (const wd of words) {
+    if ((cur + ' ' + wd).length > 22) { lines.push(cur); cur = wd; } else cur = cur ? cur + ' ' + wd : wd;
+  }
+  if (cur) lines.push(cur);
+  const ls = lines.slice(0, 3);
+  const bw = Math.max(...ls.map((l) => ctx.measureText(l).width)) + 6;
+  const bh = ls.length * 5.2 + 3;
+  const bx = x - bw / 2, by = headY - 12 - bh;
+  pill(bx, by, bw, bh, 'rgba(255,255,255,0.96)', '#2b2f3a');
+  ctx.fillStyle = 'rgba(255,255,255,0.96)';
+  ctx.beginPath(); ctx.moveTo(x - 2, by + bh); ctx.lineTo(x, by + bh + 3); ctx.lineTo(x + 2, by + bh); ctx.fill();
+  ls.forEach((l, i) => text(l, x, by + 4.1 + i * 5.2, 4.2, '#1d2230'));
+}
+
+/** HUD'daki kasa sayacı yükleme/çekmede parlar. */
+function hudPulse(kind) {
+  const el = document.getElementById('hud-cash');
+  if (!el) return;
+  el.classList.remove('pulse-in', 'pulse-out');
+  void el.offsetWidth;
+  el.classList.add(kind === 'withdraw' ? 'pulse-out' : 'pulse-in');
 }
 
 function drawPlayerOverlay() {
@@ -2047,9 +2582,21 @@ function onScreen(x, y) {
 }
 
 function drawFx(f) {
+  if (f.t < 0) return;
   const a = 1 - f.t / f.life;
-  ctx.globalAlpha = Math.max(0, a);
+  ctx.globalAlpha = Math.max(0, Math.min(1, a));
   if (f.kind === 'text') text(f.text, f.x, f.y - f.t * 14, f.big ? 7 : 4.5, f.color, 'center', true);
+  else if (f.kind === 'heart') text('♥', f.x, f.y, 5, '#ff5d8f', 'center', true);
+  else if (f.kind === 'z') text('z', f.x + Math.sin(f.t * 3) * 2, f.y, 3.5 + f.t * 1.5, '#cfe3ff', 'center', true);
+  else if (f.kind === 'arc') {
+    ctx.globalAlpha = 1;
+    const k = Math.min(1, f.t / f.life);
+    const x = f.x0 + (f.x1 - f.x0) * k, y = f.y0 + (f.y1 - f.y0) * k - Math.sin(k * Math.PI) * 18;
+    ctx.fillStyle = '#ffd700';
+    ctx.fillRect(x - 1.2, y - 1.2, 2.5, 2.5);
+    ctx.fillStyle = '#b8860b';
+    ctx.fillRect(x + 0.3, y - 1.2, 1, 2.5);
+  }
   else if (f.kind === 'coin') {
     ctx.fillStyle = '#ffd700';
     ctx.fillRect(f.x, f.y, 2.5, 2.5);
@@ -2104,7 +2651,8 @@ function drawLighting(night, now) {
       if (a && a.status !== 'dead') glow(f.x + 7, f.y + 6, 34, 0.8);
     }
     if (f.kind === 'rack') glow(f.x + 8, f.y + 16, 22, 0.5);
-    if (f.kind === 'ticker' || f.kind === 'tv' || f.kind === 'vending') glow(f.x + (f.w || 16) / 2, f.y + 12, 50, 0.7);
+    if (f.kind === 'ticker' || f.kind === 'tv' || f.kind === 'vending' || f.kind === 'atm') glow(f.x + (f.w || 16) / 2, f.y + 12, 50, 0.7);
+    if (f.kind === 'billboard') glow(f.x + f.w / 2, f.y + 10, 110, 0.85);
   }
   // tavan lambaları (gece ofis yine de çalışır)
   for (let y = 5; y < H; y += 11) for (let x = 6; x < W; x += 12) glow(x * T, y * T + 8, 80, 0.45);

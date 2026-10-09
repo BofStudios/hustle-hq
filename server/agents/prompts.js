@@ -1,14 +1,14 @@
 // Prompt üretimi ve toleranslı JSON eylem ayrıştırıcı.
 import { ROLES } from './roster.js';
 import { TOOL_DOCS } from './tools.js';
-import { company, agents, tasks, deliverables, balance, revenueTotal, spendLast } from '../state.js';
+import { company, agents, tasks, deliverables, balance, revenueTotal, spendLast, allocatedBudgets } from '../state.js';
 import { env } from '../config.js';
 
 export function economyLine() {
   const bal = balance();
   const burn = Math.max(1, spendLast(7) / 7);
   const runway = bal > 0 ? Math.round(bal / burn) : 0;
-  return `Kasa: ${bal.toFixed(0)} ${company.currency} | Toplam gelir: ${revenueTotal().toFixed(0)} ${company.currency} | Runway: ~${runway} gün`;
+  return `Kasa: ${bal.toFixed(0)} ${company.currency} (serbest ${(bal - allocatedBudgets()).toFixed(0)}, ajanlara ayrılmış ${allocatedBudgets().toFixed(0)}) | Toplam gelir: ${revenueTotal().toFixed(0)} ${company.currency} | Runway: ~${runway} gün`;
 }
 
 function team() {
@@ -20,14 +20,14 @@ function team() {
 
 export function systemPrompt(agent) {
   const role = ROLES[agent.role];
-  const lang = env.LANG === 'en' ? 'English' : 'Türkçe';
+  const lang = env.LANG !== 'tr' ? 'English' : 'Türkçe';
   const tools = (role.tools || []).map((t) => `- ${TOOL_DOCS[t]}`).join('\n');
   const danger = agent.hp < 30 ? `\n⚠️ CANIN ÇOK DÜŞÜK (${Math.round(agent.hp)}/100). Hemen somut, para kazandıracak, patronun puanlayacağı bir teslim çıkarmazsan KOVULACAKSIN.` : '';
   return `Sen ${agent.name}'sin. "${company.name}" adlı yapay zekâ şirketinde ${role.title} olarak çalışıyorsun (${agent.generation}. kuşak).
 ROLÜN: ${role.desc}
 
 ŞİRKET GERÇEĞİ: Bu şirketin tek amacı yasal ve etik yoldan, mümkün olan en hızlı şekilde GERÇEK PARA kazanmak. ${economyLine()}.
-Senin canın: ${Math.round(agent.hp)}/100, stresin: ${Math.round(agent.stress || 0)}/100, harcama bütçen: ${Math.round(agent.budget || 0)} ${company.currency}. Can zamanla eriyor; patron teslimini beğenip puanlarsa veya işin gerçek gelire dönüşürse artar. 0 olursa kovulursun ve yerine başkası gelir.${danger}
+Senin canın: ${Math.round(agent.hp)}/100, stresin: ${Math.round(agent.stress || 0)}/100, harcama bütçen: ${Math.round(agent.budget || 0)} ${company.currency}${(agent.role === 'marketing' || agent.role === 'cfo' || agent.role === 'ceo') && !(agent.budget > 0) ? ' (para gerektiren bir iş için request_budget ile patrondan iste)' : ''}. Can zamanla eriyor; patron teslimini beğenip puanlarsa veya işin gerçek gelire dönüşürse artar. 0 olursa kovulursun ve yerine başkası gelir.${danger}
 Patron: "${company.boss.name}". Takım: ${team()}.
 ${company.goal ? `AKTİF HEDEF: ${company.goal.text}` : 'Henüz patron hedefi yok: kendi rolünde para getirecek en iyi işi yap.'}
 

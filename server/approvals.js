@@ -6,6 +6,8 @@ import { hardBlockReason, urlAllowed, pcActionBlockReason } from './policy.js';
 import { WORKSPACE_DIR } from './config.js';
 import { runInWorkspace } from './agents/sandbox.js';
 import { openTarget, shellSpawn, killTree } from './platform.js';
+import { allocate, guardSpend } from './wallet.js';
+import { env } from './config.js';
 
 const NEEDS_SHIELD = new Set(['publish', 'spend', 'external', 'ad']);
 
@@ -34,7 +36,7 @@ export function createApproval({ agentId, kind, title, detail = '', payload = {}
   approvals.push(a);
   persist('approvals');
   emit('approval:update', a);
-  if (a.status === 'pending') toast(`📥 Onay bekliyor: ${a.title}`, 'approval');
+  if (a.status === 'pending') toast(env.LANG !== 'tr' ? `📥 Needs approval: ${a.title}` : `📥 Onay bekliyor: ${a.title}`, 'approval');
   else notifyAgent(a);
   return a;
 }
@@ -54,10 +56,12 @@ function notifyAgent(a) {
   agentLog(ag, 'approval', `Onay sonucu: ${a.title} → ${a.status}${a.result ? ' | ' + a.result.slice(0, 300) : ''}`);
 }
 
-export async function decideApproval(id, approve, answer = '') {
+export async function decideApproval(id, approve, answer = '', { confirmAmount } = {}) {
   const a = approvals.find((x) => x.id === id);
-  if (!a) throw new Error('onay bulunamadı');
-  if (a.status !== 'pending') throw new Error('zaten karar verilmiş');
+  if (!a) throw new Error(env.LANG !== 'tr' ? 'approval not found' : 'onay bulunamadı');
+  if (a.status !== 'pending') throw new Error(env.LANG !== 'tr' ? 'already decided' : 'zaten karar verilmiş');
+  // gerçek para: günlük limit, zarar durdurma, büyük harcamada tutar teyidi (kart beklemede kalır)
+  if (approve && (a.kind === 'spend' || a.kind === 'ad')) guardSpend(a.payload?.amount, confirmAmount);
   a.status = approve ? 'approved' : 'rejected';
   a.decidedAt = Date.now();
   a.result = answer ? `Boss: ${answer}` : null;
@@ -72,7 +76,7 @@ export async function decideApproval(id, approve, answer = '') {
   persist('approvals');
   emit('approval:update', a);
   notifyAgent(a);
-  if (a.kind === 'spend' || a.kind === 'publish') logDecision('Boss', `${approve ? 'Onaylandı' : 'Reddedildi'}: ${a.title}`, a.result || '');
+  if (a.kind === 'spend' || a.kind === 'publish' || a.kind === 'budget') logDecision('Boss', `${approve ? (env.LANG !== 'tr' ? 'Approved' : 'Onaylandı') : (env.LANG !== 'tr' ? 'Rejected' : 'Reddedildi')}: ${a.title}`, a.result || '');
   return a;
 }
 
@@ -86,7 +90,7 @@ async function execute(a) {
     case 'open_url': {
       if (!urlAllowed(a.payload.url)) throw new Error('URL izinli değil');
       openTarget(a.payload.url);
-      return 'Tarayıcıda açıldı.';
+      return env.LANG !== 'tr' ? 'Opened in the browser.' : 'Tarayıcıda açıldı.';
     }
     case 'pc': {
       const { action, target } = a.payload;
@@ -118,7 +122,14 @@ async function execute(a) {
       ledger.entries.push({ id: uid('led'), t: Date.now(), type: 'spend', amount, note: a.title, agentId: a.agentId, approvalId: a.id });
       persist('ledger');
       emit('ledger:changed', {});
-      return `Kasadan ${amount} düşüldü. Ödemeyi patron kendisi yapar.`;
+      return env.LANG !== 'tr' ? `${amount} deducted from the treasury ledger. The boss makes the payment.` : `Kasadan ${amount} düşüldü. Ödemeyi patron kendisi yapar.`;
+    }
+    case 'budget': {
+      // bütçe talebi: kasadaki serbest bakiyeden ajana ayrılır (para hareketi yok)
+      const ag = agentById(a.agentId);
+      const amount = Math.abs(Number(a.payload.amount) || 0);
+      const r = allocate(ag, amount, { by: 'Boss', note: a.title });
+      return env.LANG !== 'tr' ? `Budget allocated: ${amount}. ${r.name} total budget: ${r.budget}.` : `Bütçe ayrıldı: ${amount}. ${r.name} toplam bütçe: ${r.budget}.`;
     }
     default:
       return null; // publish/external/question: Boss elle uygular

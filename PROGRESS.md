@@ -62,6 +62,14 @@ Doğrulama: `npm run check` (sahte LLM ile router/parse/cooldown öz-testi) + `n
 - [x] Testler: npm test = policy (18) + router (10) + uçtan uca smoke (34); GitHub Actions (ubuntu + windows)
 - [x] README (EN+TR), LICENSE (ticari, tüm hakları saklı), CHANGELOG
 
+## v1.1 — Cüzdan & Yaşayan Dünya (oturum 5) ✅
+- [x] Cüzdan: yükle, dağıt (eşit/performans), bütçe talebi (request_budget), kâr çek, yatırımcı raporu, lobi ATM, elden bütçe, robot para çantası
+- [x] Girişte fonlama: TRY / USD / EUR → canlı kurla şirket para birimi, hemen dağıt + Max'e "bütçeyi işe koş" planı
+- [x] Gerçek para güvenliği: kural onayı, günlük limit, zarar durdurma, büyük harcamada tutar teyidi
+- [x] Yaşayan dünya: hava (sim/gerçek), gün planı, çatı partisi, dedikodu + arkadaşlık, doğum günü, pizza, yayalar, güvercin, otobüs, müşteri, zırhlı araç, resepsiyon/bekçi/temizlikçi, kedi
+- [x] Varsayılan dil İngilizce, İngilizce sızıntı denetimi (DOM + canvas) temiz
+- [x] Masaüstü kısayolu + ikon + arka plan sunucu + "Sunucuyu kapat"; 5 adımlı kısa tutorial
+
 ## Notlar / sonraki oturuma
 - Oturum 2: Undertale odaları, chibi karakterler, stres, Lemon Squeezy (salt okuma), ajan bütçeleri, reklam kampanyası, PC kontrolü (her işlem onaylı), Undertale diyalog kutusu, kovulma sahnesi, ürün paketleme (zip) eklendi. store.flush artık data/ silinse de çökmez; index.js'de uncaughtException yakalayıcı var.
 - F3-9 bitti (recordAdResult: iade/fazla harcama, ROI, liderlikte ROI sütunu).

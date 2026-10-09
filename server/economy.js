@@ -3,6 +3,10 @@ import { agents, company, graveyard, persist, updateAgent, agentLog, logDecision
 import { ROLES, ROLE_ORDER, randomLook } from './agents/roster.js';
 import { uid } from './store.js';
 import { emit, toast } from './bus.js';
+import { releaseBudget, topUp } from './wallet.js';
+import { env } from './config.js';
+
+const L = (tr, en) => (env.LANG !== 'tr' ? en : tr);
 
 export function newAgent(role, slot, generation = 1, predecessor = null) {
   const def = ROLES[role];
@@ -41,7 +45,7 @@ export function ensureRoster() {
   if (agents.length) return;
   ROLE_ORDER.forEach((role, slot) => agents.push(newAgent(role, slot)));
   persist('agents');
-  logDecision('Sistem', 'Hustle HQ kuruldu', '10 kişilik ekip işe alındı. Kural: para kazan ya da kovul.');
+  logDecision(L('Sistem', 'System'), L('Hustle HQ kuruldu', 'Hustle HQ founded'), L('10 kişilik ekip işe alındı. Kural: para kazan ya da kovul.', 'A team of 10 was hired. Rule: make money or get fired.'));
 }
 
 /** Seviye = floor(sqrt(xp/50)) + 1  →  50 XP = Lv2, 200 = Lv3, 450 = Lv4, 800 = Lv5 … */
@@ -56,9 +60,9 @@ export function gainXp(agent, n, reason = '') {
   const now = levelOf(agent.stats.xp);
   agent.level = now;
   if (now > before) {
-    agentLog(agent, 'reward', `⭐ LEVEL UP! Seviye ${now} (${reason})`);
+    agentLog(agent, 'reward', L(`⭐ LEVEL UP! Seviye ${now} (${reason})`, `⭐ LEVEL UP! Level ${now} (${reason})`));
     emit('fx', { agentId: agent.id, kind: 'levelup', level: now });
-    toast(`⭐ ${agent.name} seviye ${now} oldu!`, 'hire');
+    toast(L(`⭐ ${agent.name} seviye ${now} oldu!`, `⭐ ${agent.name} reached level ${now}!`), 'hire');
   }
   updateAgent(agent);
 }
@@ -66,28 +70,29 @@ export function gainXp(agent, n, reason = '') {
 export function reward(agent, amount, reason) {
   if (!agent || agent.status === 'dead') return;
   agent.hp = Math.max(0, Math.min(100, agent.hp + amount));
-  if (amount > 0) agent.calmUntil = Date.now() + Math.min(60, amount * 2) * 60000;
+  if (amount > 0) agent.calmUntil = Math.max(agent.calmUntil || 0, Date.now() + Math.min(60, amount * 2) * 60000);
   agent.stress = computeStress(agent);
   updateAgent(agent);
   if (Math.abs(amount) >= 5) {
-    agentLog(agent, amount > 0 ? 'reward' : 'penalty', `${amount > 0 ? '+' : ''}${amount.toFixed(0)} can: ${reason}`);
+    agentLog(agent, amount > 0 ? 'reward' : 'penalty', `${amount > 0 ? '+' : ''}${amount.toFixed(0)} ${L('can', 'HP')}: ${reason}`);
     emit('fx', { agentId: agent.id, kind: amount > 0 ? 'heal' : 'hurt', amount: Math.round(amount) });
   }
   if (agent.hp <= 0) kill(agent, reason);
 }
 
-export function kill(agent, reason = 'para getirmedi') {
+export function kill(agent, reason = L('para getirmedi', 'made no money')) {
   if (agent.status === 'dead' || agent.role === 'claude') return;
   agent.status = 'dead';
   agent.hp = 0;
   agent.deathReason = reason;
   agent.diedAt = Date.now();
   agent.bubble = '💀';
+  releaseBudget(agent, reason);
   updateAgent(agent);
   graveyard.push({ ...publicAgent(agent), memory: agent.memory });
   persist('graveyard');
-  logDecision('Penny & Max', `${agent.name} (${agent.title}) KOVULDU`, `Sebep: ${reason}. Teslim: ${agent.stats.done}, ort. puan: ${agent.stats.rated ? (agent.stats.ratingSum / agent.stats.rated).toFixed(1) : '-'}`);
-  toast(`💀 ${agent.name} kovuldu: ${reason}`, 'death');
+  logDecision('Penny & Max', L(`${agent.name} (${agent.title}) KOVULDU`, `${agent.name} (${agent.title}) FIRED`), L(`Sebep: ${reason}. Teslim: ${agent.stats.done}, ort. puan: ${agent.stats.rated ? (agent.stats.ratingSum / agent.stats.rated).toFixed(1) : '-'}`, `Reason: ${reason}. Delivered: ${agent.stats.done}, avg rating: ${agent.stats.rated ? (agent.stats.ratingSum / agent.stats.rated).toFixed(1) : '-'}`));
+  toast(L(`💀 ${agent.name} kovuldu: ${reason}`, `💀 ${agent.name} was fired: ${reason}`), 'death');
   emit('fx', { agentId: agent.id, kind: 'death' });
   if (company.settings.autoHire) setTimeout(() => replace(agent), 45000);
 }
@@ -98,24 +103,25 @@ export function replace(dead) {
   if (idx < 0) return null;
   const fresh = newAgent(dead.role, dead.slot, (dead.generation || 1) + 1, dead);
   agents.splice(idx, 1, fresh);
+  for (const a of agents) if (a.bonds?.[dead.id] != null) delete a.bonds[dead.id];
   persist('agents');
   emit('agent:replace', { oldId: dead.id, agent: publicAgent(fresh) });
-  logDecision('Max', `${fresh.name} işe alındı (${fresh.title})`, `${dead.name}'in yerine, ${fresh.generation}. kuşak. Öncülün dersleri hafızasında.`);
-  toast(`🆕 ${fresh.name} işe başladı (${fresh.title})`, 'hire');
+  logDecision('Max', L(`${fresh.name} işe alındı (${fresh.title})`, `${fresh.name} hired (${fresh.title})`), L(`${dead.name}'in yerine, ${fresh.generation}. kuşak. Öncülün dersleri hafızasında.`, `Replaces ${dead.name}, generation ${fresh.generation}. Keeps the predecessor's lessons.`));
+  toast(L(`🆕 ${fresh.name} işe başladı (${fresh.title})`, `🆕 ${fresh.name} started (${fresh.title})`), 'hire');
   return fresh;
 }
 
 export function revive(agent) {
   if (agent.status !== 'dead') return;
   graveyard.splice(graveyard.findIndex((g) => g.id === agent.id), 1);
-  Object.assign(agent, { status: 'idle', hp: 50, bubble: '😇', deathReason: null, nextRunAt: Date.now() + 2000 });
+  Object.assign(agent, { status: 'idle', hp: 50, bubble: '😇', deathReason: null, nextRunAt: Date.now() + 2000, budget: 0 });
   persist('graveyard');
   updateAgent(agent);
-  logDecision('Boss', `${agent.name} diriltildi`, 'Patron ikinci şans verdi.');
+  logDecision('Boss', L(`${agent.name} diriltildi`, `${agent.name} revived`), L('Patron ikinci şans verdi.', 'The boss gave a second chance.'));
 }
 
 export function fire(agent) {
-  kill(agent, 'patron tarafından kovuldu');
+  kill(agent, L('patron tarafından kovuldu', 'fired by the boss'));
 }
 
 /** Teslim puanı (1-5) → can. */
@@ -134,21 +140,21 @@ export function rateDeliverable(d, stars) {
   const delta = { 1: -10, 2: -3, 3: 5, 4: 12, 5: 25 }[s] - (prev ? { 1: -10, 2: -3, 3: 5, 4: 12, 5: 25 }[prev] : 0);
   const xpGain = (s - (prev || 0)) * 5;
   if (xpGain > 0) gainXp(ag, xpGain, `${s}★`);
-  reward(ag, delta, `teslim puanı ${s}★: ${d.title}`);
+  reward(ag, delta, L(`teslim puanı ${s}★: ${d.title}`, `rated ${s}★: ${d.title}`));
 }
 
 /** Gerçek gelir kaydı. Teslime bağlanırsa ilgili ajan büyük ödül alır, takım da pay alır. */
 export function recordRevenue(amount, note, deliverableId, agentId = null) {
   const n = Math.abs(Number(amount) || 0);
-  if (!n) throw new Error('tutar gerekli');
+  if (!n) throw new Error(L('tutar gerekli', 'amount required'));
   const d = deliverableId ? deliverables.find((x) => x.id === deliverableId) : null;
   ledger.entries.push({ id: uid('led'), t: Date.now(), type: 'revenue', amount: n, note: String(note || 'Gelir').slice(0, 200), deliverableId: d?.id || null, agentId: d?.agentId || agentId || null });
   if (!d && agentId) {
     const ag = agentById(agentId);
     if (ag) {
       ag.stats.revenue += n;
-      reward(ag, 40, `GERÇEK GELİR: ${n} ${company.currency}`);
-      gainXp(ag, Math.min(300, n), 'gelir');
+      reward(ag, 40, L(`GERÇEK GELİR: ${n} ${company.currency}`, `REAL REVENUE: ${n} ${company.currency}`));
+      gainXp(ag, Math.min(300, n), L('gelir', 'revenue'));
       ag.bubble = '💰';
       updateAgent(ag);
     }
@@ -161,28 +167,28 @@ export function recordRevenue(amount, note, deliverableId, agentId = null) {
     const ag = agentById(d.agentId);
     if (ag) {
       ag.stats.revenue += n;
-      reward(ag, 40, `GERÇEK GELİR: ${n} ${company.currency}`);
-      gainXp(ag, Math.min(300, n), 'gelir');
+      reward(ag, 40, L(`GERÇEK GELİR: ${n} ${company.currency}`, `REAL REVENUE: ${n} ${company.currency}`));
+      gainXp(ag, Math.min(300, n), L('gelir', 'revenue'));
       ag.bubble = '💰';
       updateAgent(ag);
     }
   }
-  for (const a of agents) if (a.status !== 'dead' && a.id !== (d?.agentId || agentId)) reward(a, 8, 'şirket para kazandı');
+  for (const a of agents) if (a.status !== 'dead' && a.id !== (d?.agentId || agentId)) reward(a, 8, L('şirket para kazandı', 'the company made money'));
   emit('fx', { kind: 'money', amount: n });
   emit('ledger:changed', {});
-  toast(`💰 +${n} ${company.currency} gelir!`, 'money');
-  logDecision('Penny', `Gelir: +${n} ${company.currency}`, note || '');
+  toast(L(`💰 +${n} ${company.currency} gelir!`, `💰 +${n} ${company.currency} revenue!`), 'money');
+  logDecision('Penny', L(`Gelir: +${n} ${company.currency}`, `Revenue: +${n} ${company.currency}`), note || '');
 }
 
 /** Reklam kampanyası gerçek sonucu: harcama farkı kasaya iade edilir, satış gelir olur, ROI ajana yazılır. */
 export function recordAdResult(apr, { spent, clicks, revenue }) {
-  if (apr.kind !== 'ad' || apr.status !== 'approved') throw new Error('sadece onaylanmış reklam');
-  if (apr.adResult) throw new Error('sonuç zaten girildi');
+  if (apr.kind !== 'ad' || apr.status !== 'approved') throw new Error(L('sadece onaylanmış reklam', 'approved ads only'));
+  if (apr.adResult) throw new Error(L('sonuç zaten girildi', 'result already recorded'));
   const planned = Math.abs(Number(apr.payload?.amount) || 0);
   const s = Math.max(0, Number(spent ?? planned) || 0);
   const rev = Math.max(0, Number(revenue) || 0);
   if (s < planned) {
-    ledger.entries.push({ id: uid('led'), t: Date.now(), type: 'deposit', amount: planned - s, note: `Reklam iadesi (harcanmayan): ${apr.title}` });
+    ledger.entries.push({ id: uid('led'), t: Date.now(), type: 'deposit', refund: true, amount: planned - s, note: `Reklam iadesi (harcanmayan): ${apr.title}` });
   } else if (s > planned) {
     ledger.entries.push({ id: uid('led'), t: Date.now(), type: 'spend', amount: s - planned, note: `Reklam fazla harcama: ${apr.title}` });
   }
@@ -193,21 +199,26 @@ export function recordAdResult(apr, { spent, clicks, revenue }) {
     ag.stats.adSpend = (ag.stats.adSpend || 0) + s;
     ag.stats.adRevenue = (ag.stats.adRevenue || 0) + rev;
     updateAgent(ag);
-    if (!rev && s > 0) reward(ag, -8, `reklam satış getirmedi (${s} ${company.currency} yandı)`);
+    if (!rev && s > 0) reward(ag, -8, L(`reklam satış getirmedi (${s} ${company.currency} yandı)`, `ad made no sales (${s} ${company.currency} burned)`));
   }
-  if (rev) recordRevenue(rev, `Reklam satışı: ${apr.title}`, null, apr.agentId);
+  if (rev) recordRevenue(rev, L(`Reklam satışı: ${apr.title}`, `Ad sale: ${apr.title}`), null, apr.agentId);
   else emit('ledger:changed', {});
-  logDecision('Penny', `Reklam sonucu: ${apr.title}`, `Harcanan ${s}, tıklama ${apr.adResult.clicks}, satış ${rev} → ROI ${s ? ((rev / s) * 100).toFixed(0) + '%' : '-'}`);
+  logDecision('Penny', L(`Reklam sonucu: ${apr.title}`, `Ad result: ${apr.title}`), L(`Harcanan ${s}, tıklama ${apr.adResult.clicks}, satış ${rev}`, `Spent ${s}, clicks ${apr.adResult.clicks}, sales ${rev}`) + ` → ROI ${s ? ((rev / s) * 100).toFixed(0) + '%' : '-'}`);
   return apr;
 }
 
-export function deposit(amount, note) {
-  const n = Math.abs(Number(amount) || 0);
-  if (!n) throw new Error('tutar gerekli');
-  ledger.entries.push({ id: uid('led'), t: Date.now(), type: 'deposit', amount: n, note: String(note || 'Patron sermaye ekledi').slice(0, 200) });
-  persist('ledger');
-  emit('ledger:changed', {});
-  toast(`🏦 Kasaya ${n} ${company.currency} eklendi`, 'money');
+/** Geriye uyumluluk: eski /api/ledger/deposit ucu cüzdandaki yüklemeye yönlenir. */
+export function deposit(amount, note, method = 'bank') {
+  return topUp(amount, { note, method });
+}
+
+/** İki ajan arasındaki bağ (mesajlaşma, teslim, toplantı). Dünyada kiminle sohbet edeceklerini belirler. */
+export function bond(a, b, n = 1) {
+  if (!a || !b || a.id === b.id) return;
+  for (const [x, y] of [[a, b], [b, a]]) {
+    x.bonds ||= {};
+    x.bonds[y.id] = Math.min(100, Math.round(((x.bonds[y.id] || 0) + n) * 10) / 10);
+  }
 }
 
 let lastTick = Date.now();
@@ -231,7 +242,7 @@ export function economyTick() {
     if (a.status === 'dead' || a.role === 'claude') continue;
     a.hp = Math.max(0, a.hp - burn);
     a.stress = computeStress(a);
-    if (a.hp <= 0) kill(a, 'canı tükendi: zamanında para getiremedi');
+    if (a.hp <= 0) kill(a, L('canı tükendi: zamanında para getiremedi', 'ran out of HP: no money in time'));
   }
   persist('agents');
   emit('hp', agents.map((a) => [a.id, Math.round(a.hp * 10) / 10, Math.round(a.stress || 0)]));

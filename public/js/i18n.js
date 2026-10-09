@@ -4,7 +4,7 @@
 
 let lang = 'tr';
 try {
-  lang = localStorage.getItem('hq_lang') || ((navigator.language || '').toLowerCase().startsWith('tr') ? 'tr' : 'en');
+  lang = localStorage.getItem('hq_lang') || 'en'; // ürün İngilizce; Türkçe ayarlardan seçilir
 } catch {}
 export function getLang() {
   return lang;
@@ -17,7 +17,7 @@ export function setLang(l) {
 
 // Tam eşleşme: metin düğümünün tamamı (kırpılmış) bu ise değiştirilir. Tek kelimeler burada durur.
 const EXACT = {
-  'Hedef Ver': 'Set Goal', 'Motorlar': 'Engines', 'Karakterim': 'My Character', 'Kişiler': 'People', 'Görevler': 'Tasks',
+  'Cüzdan': 'Wallet', 'Hedef Ver': 'Set Goal', 'Motorlar': 'Engines', 'Karakterim': 'My Character', 'Kişiler': 'People', 'Görevler': 'Tasks',
   'Kararlar': 'Decisions', 'Teslimler': 'Deliverables', 'Dosyalar': 'Files', 'Onaylar': 'Approvals', 'Kasa': 'Treasury',
   'Borsa': 'Market', 'Yönetim': 'Admin', 'KASA': 'CASH', 'GELİR': 'REVENUE', 'EKİP': 'TEAM', 'CANLI': 'LIVE', 'DEMO': 'DEMO',
   'Adet': 'Qty', 'Ajan': 'Agent', 'Bağla': 'Connect', 'Boss': 'Boss', 'Boş': 'Empty', 'Boşta': 'Idle', 'Can': 'HP',
@@ -238,6 +238,18 @@ const PHRASES = [
   // ipucu satırı
   ['WASD / Oklar: yürü · Shift: koş · E: etkileşim · Tıkla: git/konuş · F: ajanı takip · Tab: görevler · B: hedef · Q: onaylar · 1-0: ajana ışınlan · +/-: yakınlaş · M: harita',
     'WASD / Arrows: walk · Shift: run · E: interact · Click: go/talk · F: follow agent · Tab: tasks · B: goal · Q: approvals · 1-0: jump to agent · +/-: zoom · M: map'],
+  // v1.1 cüzdan & yaşayan dünya
+  ['API anahtarı yok: ajanlar şablonla çalışıyor. Motorlar menüsünden ücretsiz anahtar ekle.', 'No API key: agents run on templates. Add a free key in Engines.'],
+  ['Gerçek modellerle çalışıyor', 'Running on real models'],
+  ['🎥 Takip için bir ajana yaklaş ya da panelinden 🎥 Takip et', '🎥 Walk up to an agent, or use 🎥 Follow in their panel'],
+  ['Hmm, mantıklı', 'Hmm, makes sense'], ['Hustle HQ açıldı', 'Hustle HQ is open'], ['+enerji', '+energy'], ['Teslim: ', 'Delivered: '],
+  ['Bütçem geri alındı…', 'My budget got pulled…'],
+  ['Cüzdan & Yatırım', 'Wallet & Investing'], ['Bütçe talebi', 'Budget request'], ['Bütçe ayırma', 'Budget allocation'], ['Kâr çekme', 'Withdrawal'], ['Yükleme', 'Top-up'],
+  ['Lobi ATM: bakiye', 'Lobby ATM: top up'], ['ATM: bakiye yükle', 'ATM: top up balance'], ['Doğum günü pastası', 'Birthday cake'],
+  ['Patron bakiye yükledi', 'Boss topped up'], ['ATM yüklemesi', 'ATM top-up'], ['Patron kâr çekti', 'Boss withdrew profit'],
+  ['Kahve molası', 'Coffee break'], ['Fikir lazım…', 'Need an idea…'], ['Bugün satış çıkacak', "We'll make a sale today"], ['Biraz hava…', 'Some fresh air…'],
+  ['Nefes al… nefes ver…', 'Breathe in… breathe out…'], ['Kovulmayacağım, kovulmayacağım', "I won't get fired, I won't get fired"], ['Bir kahve daha lazım', 'Need another coffee'],
+  ['Runway’e bakamıyorum', "Can't look at the runway"], ['Yeni görev geldi!', 'New task arrived!'], ['Hoşça kal', 'Goodbye'],
   ['Ses aç/kapa', 'Sound on/off'], ['Motor durumu', 'Engine status'], ['Kasa (defter bakiyesi)', 'Treasury (ledger balance)'], ['Toplam gerçek gelir', 'Total real revenue'],
   ['Çalışan / uyuyan / kovulan', 'Working / sleeping / fired'], ['Sunucuya bağlanılıyor…', 'Connecting to server…'],
 ].sort((a, b) => b[0].length - a[0].length);

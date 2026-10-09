@@ -234,8 +234,63 @@ export function setAmbience(roomId) {
   ambLayer = { gain: g, stop: make(g) };
 }
 
+// ---- hava sesi: oda ambiyansından ayrı ikinci katman (dışarıda yüksek, içeride boğuk)
+let wxKey = null;
+let wxLayer = null;
+export function setWeatherSound(kind, outdoor) {
+  if (!ac || ac.state !== 'running') return;
+  const wet = kind === 'rain' || kind === 'storm';
+  const key = enabled && (wet || kind === 'snow') ? `${kind}|${outdoor ? 1 : 0}` : null;
+  if (key === wxKey) return;
+  wxKey = key;
+  const t = ac.currentTime;
+  if (wxLayer) {
+    const old = wxLayer;
+    old.gain.gain.cancelScheduledValues(t);
+    old.gain.gain.setValueAtTime(old.gain.gain.value, t);
+    old.gain.gain.linearRampToValueAtTime(0, t + 1);
+    setTimeout(() => { try { old.stop(); } catch {} old.gain.disconnect(); }, 1100);
+    wxLayer = null;
+  }
+  if (!key) return;
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(1, t + 1.5);
+  const muffle = ac.createBiquadFilter();
+  muffle.type = 'lowpass';
+  muffle.frequency.value = outdoor ? 9000 : 700;
+  muffle.connect(g);
+  g.connect(master);
+  const srcs = [];
+  if (wet) {
+    const heavy = kind === 'storm';
+    srcs.push(loopNoise(muffle, { type: 'bandpass', freq: 1400, q: 0.35, vol: (outdoor ? 0.22 : 0.12) * (heavy ? 1.5 : 1) }));
+    srcs.push(loopNoise(muffle, { brown: true, freq: 300, vol: (outdoor ? 0.35 : 0.2) * (heavy ? 1.4 : 1) }));
+  } else {
+    srcs.push(loopNoise(muffle, { type: 'bandpass', freq: 600, q: 0.4, vol: outdoor ? 0.05 : 0.015 }));
+  }
+  wxLayer = { gain: g, stop: () => srcs.forEach((x) => x.stop()) };
+}
+
+function burst(dur, vol, { type = 'lowpass', freq = 300, brown = true } = {}) {
+  if (!enabled || !ac || ac.state !== 'running') return;
+  const src = ac.createBufferSource();
+  src.buffer = noiseBuffer(dur, brown);
+  const f = ac.createBiquadFilter();
+  f.type = type;
+  f.frequency.value = freq;
+  const g = ac.createGain();
+  const t0 = ac.currentTime;
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.connect(f).connect(g).connect(master);
+  src.start();
+  src.stop(t0 + dur + 0.05);
+}
+
 // sekme gizlenince ambiyans susar; görünür olunca world.js bir sonraki karede yeniden kurar
-document.addEventListener('visibilitychange', () => { if (document.hidden) setAmbience(null); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { setAmbience(null); setWeatherSound(null, false); } });
 
 function stepOut() {
   if (ambRoom !== 'hall') return master;
@@ -270,6 +325,14 @@ export const sfx = {
   carPass: () => noise(0.6, 0.08),
   door: () => { noise(0.08, 0.2); tone(180, 0.12, { type: 'triangle', vol: 0.35, slide: -60 }); },
   error: () => tone(160, 0.2, { type: 'square', vol: 0.3, slide: -40 }),
+  thunder: (near = 1) => { burst(2.6, 0.9 * near, { freq: 160 }); setTimeout(() => burst(1.4, 0.5 * near, { freq: 90 }), 250); },
+  kaching: () => { tone(1568, 0.06, { type: 'square', vol: 0.3 }); tone(2093, 0.25, { type: 'triangle', vol: 0.4, delay: 0.07 }); noise(0.12, 0.25); },
+  atmBeep: () => { tone(1200, 0.06, { type: 'square', vol: 0.22 }); tone(1200, 0.06, { type: 'square', vol: 0.22, delay: 0.12 }); },
+  flap: () => { for (let i = 0; i < 5; i++) setTimeout(() => noise(0.04, 0.18), i * 60); },
+  brake: () => { burst(0.7, 0.12, { type: 'highpass', freq: 2500, brown: false }); },
+  meow: () => { tone(700, 0.18, { type: 'triangle', vol: 0.3, slide: 260 }); tone(900, 0.22, { type: 'triangle', vol: 0.25, slide: -380, delay: 0.17 }); },
+  party: () => { tone(523, 0.25, { type: 'sawtooth', vol: 0.18, slide: 300 }); [659, 784, 1046].forEach((f, i) => tone(f, 0.12, { type: 'triangle', vol: 0.3, delay: 0.25 + i * 0.08 })); },
+  give: () => { [880, 1175, 1760].forEach((f, i) => tone(f, 0.08, { type: 'triangle', vol: 0.3, delay: i * 0.05 })); },
 };
 
 export function soundEnabled() {
@@ -279,6 +342,6 @@ export function soundEnabled() {
 export function toggleSound() {
   enabled = !enabled;
   try { localStorage.setItem('hq_sound', enabled ? '1' : '0'); } catch {}
-  if (enabled) { audio(); sfx.ding(); } else setAmbience(null);
+  if (enabled) { audio(); sfx.ding(); } else { setAmbience(null); setWeatherSound(null, false); }
   return enabled;
 }

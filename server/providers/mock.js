@@ -6,7 +6,7 @@ import { company } from '../state.js';
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const EN = () => env.LANG === 'en';
+const EN = () => env.LANG !== 'tr';
 const L = (tr, en) => (EN() ? en : tr);
 const cur = () => company?.currency || (EN() ? '$' : '₺');
 
@@ -185,6 +185,10 @@ function roleFlow(role, step, task, meta) {
     }
     case 'marketing': {
       if (/reklam|ad campaign/i.test(T)) {
+        const need = (EN() ? 10 : 100) * 3;
+        const short = (meta.agent?.budget || 0) < need;
+        if (step === 0 && short) return act(L('Bütçem yetmiyor, patrondan bütçe istiyorum.', "My budget isn't enough, asking the boss for budget."), 'request_budget', { amount: need, reason: L('3 günlük Instagram test kampanyası', '3-day Instagram test campaign'), expected_return: L('3 günde 2-4 satış', '2-4 sales in 3 days') });
+        if (step >= 1 && short) return act(L('Talep patronda, onay gelince kampanyayı kuracağım.', "Request is with the boss; I'll set up the campaign once approved."), 'finish', { summary: L(`Kampanya için ${need} ${c} bütçe istendi. Onaylanınca kurulacak.`, `Asked for ${c}${need} budget for the campaign. Will set it up once approved.`), title: T });
         if (step === 0) return act(L('Bütçem dahilinde küçük bir test kampanyası planlıyorum.', 'Planning a small test campaign within my budget.'), 'ad_campaign', { platform: 'instagram', audience: L('25-40 yaş freelancerlar', 'freelancers aged 25-40'), daily_budget: EN() ? 10 : 100, days: 3, headline: T.slice(0, 40), text: L('5 dakikada kur, hemen kullan.', 'Set up in 5 minutes, use it today.'), cta: L('Satın al', 'Buy now'), landing_url: 'https://example.com', expected_return: L('3 günde 2-4 satış', '2-4 sales in 3 days') });
         return act(L('Kampanya planı hazır.', 'Campaign plan ready.'), 'finish', { summary: L('Test kampanyası planlandı (bütçe yoksa patrondan bütçe istenmeli).', 'Test campaign planned (ask the boss for budget if none is allocated).'), title: T });
       }

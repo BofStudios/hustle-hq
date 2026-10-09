@@ -3,7 +3,10 @@ import { writeFile, readFile, listFiles, runInWorkspace, safePath, relPath, zipD
 import { commandNeedsApproval, urlAllowed, hardBlockReason, sandboxCommand, pcActionBlockReason } from '../policy.js';
 import { WORKSPACE_DIR } from '../config.js';
 import { createApproval } from '../approvals.js';
-import { createTask, findAgent, agentLog, updateAgent, logDecision, addDeliverable, company } from '../state.js';
+import { createTask, findAgent, agentLog, updateAgent, logDecision, addDeliverable, company, approvals } from '../state.js';
+import { bond } from '../economy.js';
+import { env } from '../config.js';
+const EN = () => env.LANG !== 'tr';
 import { quote, paperTrade } from '../market.js';
 import { emit } from '../bus.js';
 import fs from 'node:fs';
@@ -22,6 +25,7 @@ export const TOOL_DOCS = {
   decide: 'decide {"title": "karar", "why": "gerekçe"} → kararlar defterine yazar',
   escalate: 'escalate {"question": "patrona soru veya engel", "options": ["A","B"]} → patronun onay masasına düşer',
   request_approval: 'request_approval {"kind": "publish|external|open_url", "title": "...", "detail": "yayınlanacak tam içerik ve nerede", "url": "(open_url için)", "expected_return": "..."}',
+  request_budget: 'request_budget {"amount": 200, "reason": "ne için", "expected_return": "beklenen getiri"} → patrondan bütçe iste; onaylanırsa kasadan sana ayrılır (para hareketi yok, harcamayı yine patron yapar)',
   propose_spend: 'propose_spend {"amount": 100, "item": "ne alınacak", "why": "neden", "expected_return": "beklenen getiri"} → patron onaylarsa kendisi öder',
   package_product: 'package_product {"name": "ürün adı", "files": ["proje/dosya.pdf", "..."], "price": 149, "description": "kime, ne işe yarar, içinde ne var"} → satılabilir zip paketi + README + satış metni üretir, patrona "yükle" onayı gider',
   ad_campaign: 'ad_campaign {"platform": "instagram|tiktok|google|meta", "audience": "hedef kitle", "daily_budget": 50, "days": 5, "headline": "...", "text": "reklam metni", "cta": "Satın al", "landing_url": "https://...", "expected_return": "..."} → gerçek reklam planı; denetçi + patron onayı, patron kendisi yayınlar ve öder',
@@ -110,7 +114,7 @@ export const TOOLS = {
       const a = createApproval({
         agentId: ctx.agent.id,
         kind: isInstall ? 'install' : 'command',
-        title: `Komut: ${String(command).slice(0, 80)}`,
+        title: `${EN() ? 'Command' : 'Komut'}: ${String(command).slice(0, 80)}`,
         detail: `Klasör: workspace/${cwd}\nKomut: ${command}\nNeden onay: ${why}\nGörev: ${ctx.task?.title || '-'}`,
         payload: { command, cwd },
       });
@@ -147,6 +151,7 @@ export const TOOLS = {
     updateAgent(target);
     agentLog(target, 'inbox', `${ctx.agent.name}: ${String(text).slice(0, 300)}`);
     emit('walk', { agentId: ctx.agent.id, to: target.id, reason: 'mesaj', text: String(text).slice(0, 60) });
+    bond(ctx.agent, target, 1);
     return `Mesaj ${target.name}'e iletildi.`;
   },
 
@@ -174,7 +179,7 @@ export const TOOLS = {
     const a = createApproval({
       agentId: ctx.agent.id,
       kind: 'question',
-      title: `Soru: ${String(question).slice(0, 120)}`,
+      title: `${EN() ? 'Question' : 'Soru'}: ${String(question).slice(0, 120)}`,
       detail: `${question}\n\nSeçenekler: ${(options || []).join(' / ') || '-'}`,
       payload: { options },
     });
@@ -190,13 +195,31 @@ export const TOOLS = {
     return { result: `Onaya gönderildi (${a.id}). Önce denetçi, sonra patron bakacak.`, pending: a.id };
   },
 
+  async request_budget({ amount, reason = '', expected_return = '' }, ctx) {
+    const n = Math.round(Number(amount));
+    if (!Number.isFinite(n) || n <= 0) return 'HATA: amount pozitif sayı olmalı';
+    const open = approvals.find((x) => x.status === 'pending' && x.kind === 'budget' && x.agentId === ctx.agent.id);
+    if (open) return `Zaten bekleyen bir bütçe talebin var (${open.id}). Patron karar verene kadar bekle, başka işe geç.`;
+    const a = createApproval({
+      agentId: ctx.agent.id, kind: 'budget',
+      title: EN() ? `Budget request: ${ctx.agent.name} · ${n} ${company.currency}` : `Bütçe talebi: ${ctx.agent.name} · ${n} ${company.currency}`,
+      detail: EN()
+        ? `Amount: ${n} ${company.currency}\nFor: ${reason}\nExpected return: ${expected_return}\nCurrent budget: ${ctx.agent.budget || 0} ${company.currency}`
+        : `Tutar: ${n} ${company.currency}\nNe için: ${reason}\nBeklenen getiri: ${expected_return}\nMevcut bütçe: ${ctx.agent.budget || 0} ${company.currency}`,
+      payload: { amount: n }, expectedReturn: expected_return,
+    });
+    if (a.status === 'rejected') return `REDDEDİLDİ: ${a.result}`;
+    emit('walk', { agentId: ctx.agent.id, to: 'boss', reason: 'butce', text: `${n} ${company.currency}` });
+    return { result: `Bütçe talebi patronun masasına gitti (${a.id}). Onaylanınca bütçen artar; o zamana kadar ücretsiz işlere odaklan.`, pending: a.id };
+  },
+
   async propose_spend({ amount, item, why = '', expected_return = '' }, ctx) {
     const n = Number(amount);
     if (!Number.isFinite(n) || n <= 0) return 'HATA: amount pozitif sayı olmalı';
     if (n > (ctx.agent.budget || 0)) return `HATA: bütçen yetersiz (${ctx.agent.budget || 0} ${company.currency}). escalate/send_message ile Max'ten ya da patrondan bütçe iste.`;
     const a = createApproval({
       agentId: ctx.agent.id, kind: 'spend',
-      title: `Harcama: ${item} (${n} ${company.currency})`,
+      title: EN() ? `Spend: ${item} (${company.currency}${n})` : `Harcama: ${item} (${n} ${company.currency})`,
       detail: `Ne: ${item}\nTutar: ${n} ${company.currency}\nNeden: ${why}\nBeklenen getiri: ${expected_return}`,
       payload: { amount: n, item }, expectedReturn: expected_return,
     });
@@ -223,7 +246,7 @@ export const TOOLS = {
     emit('fs:changed', { path: zip, agentId: ctx.agent.id });
     const a = createApproval({
       agentId: ctx.agent.id, kind: 'publish',
-      title: `Ürünü yayınla: ${name} (${price} ${company.currency})`,
+      title: EN() ? `Publish product: ${name} (${company.currency}${price})` : `Ürünü yayınla: ${name} (${price} ${company.currency})`,
       detail: `Paket: workspace/${zip}\nSatış metni: workspace/${dir}/SATIS-METNI.md\n\nAdımlar:\n1. app.lemonsqueezy.com → Products → New product\n2. Ad: ${name}, fiyat: ${price}\n3. Açıklamaya SATIS-METNI.md içeriğini yapıştır\n4. Dosya olarak zip'i yükle, yayınla\n5. Hustle HQ → Kasa → Lemon Squeezy bölümünde ürünü bu teslime bağla\n\n${description}`,
       payload: { zip, name, price }, expectedReturn: `${price} ${company.currency} / satış`,
     });
@@ -240,7 +263,7 @@ export const TOOLS = {
     ctx.files.add(rel);
     const a = createApproval({
       agentId: ctx.agent.id, kind: 'ad',
-      title: `Reklam: ${args.platform} · ${total} ${company.currency}`,
+      title: EN() ? `Ad: ${args.platform} · ${company.currency}${total}` : `Reklam: ${args.platform} · ${total} ${company.currency}`,
       detail: plan, payload: { amount: total, platform: args.platform, url: args.landing_url, file: rel }, expectedReturn: args.expected_return || '',
     });
     if (a.status === 'rejected') return `REDDEDİLDİ: ${a.result}`;

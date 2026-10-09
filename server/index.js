@@ -9,19 +9,20 @@ import { bus, emit } from './bus.js';
 import {
   snapshot, agents, company, tasks, deliverables, persist, approvals, findAgent, agentById, createTask, updateTask, updateAgent, publicAgent,
 } from './state.js';
-import { ensureRoster, rateDeliverable, recordRevenue, deposit, fire, revive, replace, recordAdResult } from './economy.js';
+import { ensureRoster, rateDeliverable, recordRevenue, fire, revive, replace, recordAdResult } from './economy.js';
+import { topUp, withdraw, allocate, distribute, walletView, fund, safetyStatus, acceptSafety } from './wallet.js';
+import { currentWeather, treatById, pizzaParty } from './life.js';
 import { startRuntime, chatWithAgent, setGoal, dailyReportCheck } from './agents/runtime.js';
 import { decideApproval, pendingCount } from './approvals.js';
 import { providerStatus, isDemo, probeOllama, testProvider, ALIASES } from './providers/router.js';
 import { PROVIDERS } from './providers/catalog.js';
 import { runClaude, claudeStatus, stopClaude } from './claude.js';
-import { portfolioView, quote, resetPortfolio, paperTrade } from './market.js';
+import { portfolioView, quote, resetPortfolio, paperTrade, fxRate } from './market.js';
 import { safePath } from './agents/sandbox.js';
 import { ROLES } from './agents/roster.js';
 import { load, save } from './store.js';
 import { exportZip, resetCompany } from './maintenance.js';
 import { startLemonSqueezy, syncOrders, syncProducts, linkProduct, lsStatus } from './lemonsqueezy.js';
-import { balance } from './state.js';
 
 const PORT = num('PORT', 3777);
 const MIME = {
@@ -64,7 +65,7 @@ route('POST', '/api/goals/queue', async (b) => {
   const op = b.op || 'add';
   if (op === 'add') {
     const text = String(b.text || '').trim().slice(0, 600);
-    if (!text) throw new Error('hedef boş');
+    if (!text) throw new Error('goal is empty');
     if (!company.goal) setGoal(text); // aktif hedef yoksa direkt başlar
     else company.goalQueue.push(text);
   } else if (op === 'remove') company.goalQueue.splice(Number(b.index), 1);
@@ -81,7 +82,7 @@ route('POST', '/api/report/now', async () => ({ task: dailyReportCheck(true) }))
 
 route('POST', '/api/tasks', async (b) => {
   const a = findAgent(b.assignee);
-  if (!a) throw new Error('ajan bulunamadı');
+  if (!a) throw new Error('agent not found');
   if (ROLES[a.role].manual) throw new Error('Claude için /api/claude kullan');
   const t = createTask({ title: b.title, detail: b.detail || '', assignee: a.id, createdBy: 'Boss', priority: 3 });
   a.nextRunAt = Date.now() + 1000;
@@ -117,7 +118,11 @@ route('POST', '/api/agents/:id/look', async (b, p) => {
   return publicAgent(a);
 });
 
-route('POST', '/api/approvals/:id', async (b, p) => decideApproval(p.id, !!b.approve, String(b.answer || '').slice(0, 2000)));
+route('POST', '/api/approvals/:id', async (b, p) => decideApproval(p.id, !!b.approve, String(b.answer || '').slice(0, 2000), { confirmAmount: b.confirmAmount }));
+route('GET', '/api/safety', () => safetyStatus());
+route('POST', '/api/safety/ack', async () => acceptSafety());
+// masaüstü kısayolundan açılan sunucuyu arayüzden kapatmak için (sadece yerel, CSRF korumalı)
+route('POST', '/api/shutdown', async () => { setTimeout(() => { flush(); process.exit(0); }, 300); return { ok: true }; });
 
 route('POST', '/api/deliverables/:id/rate', async (b, p) => {
   const d = deliverables.find((x) => x.id === p.id);
@@ -148,14 +153,17 @@ route('GET', '/api/file', (b, p, q) => {
 route('POST', '/api/agents/:id/budget', async (b, p) => {
   const a = agentById(p.id);
   if (!a) throw new Error('ajan yok');
-  const n = Number(b.amount) || 0;
-  const allocated = agents.reduce((s, x) => s + (x.budget || 0), 0) - (a.budget || 0);
-  const next = Math.max(0, (a.budget || 0) + n);
-  if (n > 0 && allocated + next > balance()) throw new Error(`Kasada yeterli tahsis edilmemiş bakiye yok (kasa ${balance()}, tahsisli ${allocated})`);
-  updateAgent(a, { budget: next });
-  emit('toast', { text: `💼 ${a.name} bütçesi: ${next} ${company.currency}`, kind: 'money' });
-  return publicAgent(a);
+  return allocate(a, b.amount, { by: company.boss?.name || 'Boss', inPerson: !!b.inPerson });
 });
+route('POST', '/api/agents/:id/treat', async (b, p) => treatById(p.id, String(b.kind || '')));
+route('POST', '/api/team/pizza', async () => pizzaParty());
+route('GET', '/api/wallet', () => walletView());
+route('POST', '/api/wallet/topup', async (b) => { topUp(b.amount, { method: b.method, note: b.note }); return walletView(); });
+route('POST', '/api/wallet/withdraw', async (b) => { withdraw(b.amount, b.note); return walletView(); });
+route('POST', '/api/wallet/distribute', async (b) => ({ split: distribute(b.amount, b.mode === 'performance' ? 'performance' : 'equal'), wallet: walletView() }));
+route('GET', '/api/world', async () => ({ weather: await currentWeather(), t: Date.now() }));
+route('GET', '/api/fx', async (b, p, q) => fxRate(q.get('from') || 'USD', q.get('to') || company.currency));
+route('POST', '/api/wallet/fund', async (b) => fund({ amount: b.amount, currency: b.currency, split: b.split, note: b.note }));
 route('POST', '/api/ads/:id/result', async (b, p) => {
   const apr = approvals.find((x) => x.id === p.id);
   if (!apr) throw new Error('reklam bulunamadı');
@@ -173,12 +181,12 @@ route('GET', '/api/lemonsqueezy', () => lsStatus());
 route('POST', '/api/lemonsqueezy/key', async (b) => { setEnv('LEMONSQUEEZY_API_KEY', b.key); await syncProducts(); return syncOrders(); });
 route('POST', '/api/lemonsqueezy/sync', async () => { await syncProducts(); return syncOrders(); });
 route('POST', '/api/lemonsqueezy/link', async (b) => linkProduct(b.productId, b.deliverableId));
-route('POST', '/api/ledger/deposit', async (b) => { deposit(b.amount, b.note); return { ok: true }; });
+route('POST', '/api/ledger/deposit', async (b) => { topUp(b.amount, { note: b.note, method: b.method }); return { ok: true }; });
 route('POST', '/api/ledger/revenue', async (b) => { recordRevenue(b.amount, b.note, b.deliverableId); return { ok: true }; });
 
 // İlk kurulum sihirbazı: alıcı kendi şirket bilgilerini girer. Anahtarlar ayrı uçtan (/api/providers/key) gelir.
 route('POST', '/api/setup', async (b) => {
-  const lang = b.lang === 'en' ? 'en' : 'tr';
+  const lang = b.lang === 'tr' ? 'tr' : 'en';
   setEnv('LANG', lang);
   if (b.name) company.name = String(b.name).trim().slice(0, 40) || company.name;
   if (b.currency) company.currency = String(b.currency).trim().slice(0, 4) || company.currency;
@@ -198,6 +206,14 @@ route('POST', '/api/company', async (b) => {
     if (s.proactiveMinutes != null) company.settings.proactiveMinutes = Math.max(2, Math.min(240, Number(s.proactiveMinutes)));
     if (s.autoHire != null) company.settings.autoHire = !!s.autoHire;
     if (s.paused != null) company.settings.paused = !!s.paused;
+    if (s.weather != null) company.settings.weather = ['auto', 'real', 'clear', 'cloudy', 'rain', 'storm', 'snow', 'fog'].includes(s.weather) ? s.weather : 'auto';
+    if (s.safety) {
+      const cur = company.settings.safety || {};
+      const num0 = (v, lo, hi) => (v === '' || v == null || !Number.isFinite(Number(v)) ? undefined : Math.max(lo, Math.min(hi, Number(v))));
+      const next = { dailyCap: num0(s.safety.dailyCap, 0, 1e9), stopLossPct: num0(s.safety.stopLossPct, 0, 100), bigSpendPct: num0(s.safety.bigSpendPct, 0, 100) };
+      company.settings.safety = { ...cur, ...Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined)) };
+    }
+    if (s.city != null) company.settings.city = String(s.city).replace(/[^\p{L}\p{N} ,.'-]/gu, '').trim().slice(0, 60);
   }
   persist('company');
   emit('company', company);
@@ -312,8 +328,8 @@ server.on('error', (e) => {
   console.error('[sunucu]', e);
 });
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`\n  🏢 Hustle HQ çalışıyor → http://localhost:${PORT}`);
-  console.log(`  Mod: ${isDemo() ? 'DEMO (API anahtarı yok — Yönetim > Motorlar’dan ekle)' : 'CANLI'}`);
+  console.log(`\n  🏢 Hustle HQ is running → http://localhost:${PORT}`);
+  console.log(`  Mode: ${isDemo() ? 'DEMO (no API key yet — add one in Admin > Engines)' : 'LIVE'}`);
   console.log(`  Workspace: ${WORKSPACE_DIR}\n`);
 });
 

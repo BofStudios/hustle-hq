@@ -4,6 +4,9 @@ import { portrait, character, PAL } from './sprites.js';
 import { focusAgent, followAgent, toggleScanlines, getScanlines, getReduceFx, setReduceFx } from './world.js';
 import { sfx, toggleSound, soundEnabled } from './sound.js';
 import { getLang, setLang } from './i18n.js';
+import { weather, weatherIcon, weatherName, refreshWeather } from './life.js';
+
+const LL = (tr0, en) => (getLang() === 'en' ? en : tr0);
 
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -16,7 +19,9 @@ const ago = (t) => {
   if (s < 86400) return `${Math.floor(s / 3600)} ${en ? 'h' : 'sa'}`;
   return `${Math.floor(s / 86400)} ${en ? 'd' : 'g'}`;
 };
-const cur = () => S.company?.currency || '₺';
+const cur = () => S.company?.currency || '$';
+// İngilizcede $1,250; Türkçede 1.250 ₺
+const money = (n) => (getLang() === 'en' && cur().length <= 2 ? `${cur()}${fmt(n)}` : `${fmt(n)} ${cur()}`);
 
 let current = null; // { view, arg }
 const tabs = {};
@@ -24,7 +29,8 @@ let meta = { roles: {}, aliases: {}, providers: [] };
 
 const STATUS_TR = { idle: 'Boşta', thinking: 'Düşünüyor', working: 'Çalışıyor', sleeping: 'Uyuyor (kota)', dead: 'KOVULDU', oncall: 'Çağrıda bekliyor', walking: 'Yürüyor' };
 const KIND_TR = { idea: '💡 Fikir', report: '📄 Rapor', code: '💻 Kod', image: '🎨 Görsel', product: '📦 Satılık ürün' };
-const APR_TR = { command: '⌨️ Komut', install: '📦 Kurulum', publish: '📣 Yayın', spend: '💸 Harcama', external: '🌐 Dış işlem', open_url: '🔗 URL aç', question: '❓ Soru', pc: '🖥️ PC kontrolü', ad: '📢 Reklam kampanyası' };
+const APR_TR = { command: '⌨️ Komut', install: '📦 Kurulum', publish: '📣 Yayın', spend: '💸 Harcama', external: '🌐 Dış işlem', open_url: '🔗 URL aç', question: '❓ Soru', pc: '🖥️ PC kontrolü', ad: '📢 Reklam kampanyası', budget: '💼 Bütçe talebi' };
+const LEDGER_TR = { deposit: '🏦 Yükleme', spend: '💸 Harcama', revenue: '💰 Gelir', withdraw: '🏧 Kâr çekme', alloc: '💼 Bütçe ayırma' };
 
 // ======================= BAŞLAT =======================
 export async function initUI() {
@@ -61,7 +67,7 @@ export async function initUI() {
     if (type === 'agent:log' || type === 'tick' || type === 'hp') return;
     scheduleRerender();
   });
-  on('ledger', () => scheduleRerender());
+  on('ledger', () => { walletStale = true; scheduleRerender(); });
   setInterval(updateHud, 1000);
   updateHud();
 }
@@ -85,8 +91,9 @@ export function toast(text, kind = 'info') {
 function updateHud() {
   if (!S.company) return;
   $('#company-name').textContent = S.company.name.toUpperCase();
-  $('#hud-cash').textContent = `${fmt(S.ledger.balance)} ${cur()}`;
-  $('#hud-rev').textContent = `${fmt(S.ledger.revenue)} ${cur()}`;
+  $('#hud-cash').textContent = money(S.ledger.balance);
+  if (S.ledger.free != null) $('#hud-cash').parentElement.title = LL(`Kasa ${fmt(S.ledger.balance)} · serbest ${fmt(S.ledger.free)} · ajanlarda ${fmt(S.ledger.allocated)} ${cur()} (kayıt defteri)`, `Treasury ${fmt(S.ledger.balance)} · free ${fmt(S.ledger.free)} · with agents ${fmt(S.ledger.allocated)} ${cur()} (ledger)`);
+  $('#hud-rev').textContent = money(S.ledger.revenue);
   const ag = [...S.agents.values()];
   const working = ag.filter((a) => a.status === 'working' || a.status === 'thinking').length;
   const sleeping = ag.filter((a) => a.status === 'sleeping').length;
@@ -101,7 +108,10 @@ function updateHud() {
   mb.title = S.demo ? 'API anahtarı yok: ajanlar şablonla çalışıyor. Motorlar menüsünden ücretsiz anahtar ekle.' : 'Gerçek modellerle çalışıyor';
   $('#prov-lights').innerHTML = S.providers.filter((p) => p.hasKey).map((p) => `<span class="${p.state}" title="${esc(p.name)}: ${p.state}"></span>`).join('') || '<span title="Motor yok"></span>';
   const d = new Date();
-  $('#clock').textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const day = (getLang() === 'en' ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] : ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'])[d.getDay()];
+  const night = d.getHours() >= 20 || d.getHours() < 6;
+  $('#clock').textContent = `${weatherIcon(night)} ${weather.temp}° · ${day} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  $('#clock').title = `${weatherName()}${weather.city ? ' · ' + weather.city : ''}${weather.source === 'real' ? '' : LL(' (simülasyon)', ' (simulated)')}`;
   const gb = $('#goal-bar');
   gb.hidden = !S.company.goal;
   if (S.company.goal) $('#goal-text').textContent = S.company.goal.text;
@@ -118,9 +128,9 @@ function renderFeed() {
 // ======================= ÇEKMECE =======================
 const TITLES = {
   boss: '🎯 Boss Masası', approvals: '📥 Onay Kuyruğu', tasks: '📋 Görev Panosu', engines: '⚙️ Motorlar & Sağlayıcılar', character: '🧍 Karakterim',
-  people: '👥 Kişiler', files: '🗂️ Dosyalar (workspace)', decisions: '📜 Kararlar', deliverables: '📦 Teslimler', cash: '🏦 Kasa', market: '📈 Borsa Masası (Sanal)', claude: '⚡ Claude Masası', settings: '🛠️ Yönetim',
+  people: '👥 Kişiler', files: '🗂️ Dosyalar (workspace)', decisions: '📜 Kararlar', deliverables: '📦 Teslimler', cash: '🏦 Kasa', wallet: '💳 Cüzdan & Yatırım', market: '📈 Borsa Masası (Sanal)', claude: '⚡ Claude Masası', settings: '🛠️ Yönetim',
 };
-const ALIAS_VIEW = { servers: 'engines', whiteboard: 'tasks', archive: 'deliverables' };
+const ALIAS_VIEW = { servers: 'engines', whiteboard: 'tasks', archive: 'deliverables', atm: 'wallet' };
 
 export function open(view, arg) {
   view = ALIAS_VIEW[view] || view;
@@ -194,7 +204,8 @@ VIEWS.boss = () => {
     <div class="presets">${presets.map((p) => `<button data-action="goal-preset" data-text="${esc(p)}">${esc(p)}</button>`).join('')}</div>
     <div class="row"><button class="btn" data-action="goal-set">🎯 Hedefi Max'e ver</button><button class="btn ghost shrink" data-action="goal-queue">➕ Sıraya ekle</button></div>
     ${(S.company?.goalQueue || []).length ? `<h3>SIRADAKİ HEDEFLER (${S.company.goalQueue.length})</h3><div class="muted" style="margin-bottom:6px">Aktif hedefin tüm işleri bitince sıradaki otomatik başlar.</div>${S.company.goalQueue.map((q, i) => `<div class="card"><div class="row"><span>${i + 1}. ${esc(q)}</span><button class="btn ghost small shrink" data-action="gq-move" data-i="${i}" data-dir="up">↑</button><button class="btn ghost small shrink" data-action="gq-move" data-i="${i}" data-dir="down">↓</button><button class="btn red small shrink" data-action="gq-del" data-i="${i}">✕</button></div></div>`).join('')}` : ''}
-    <div style="margin-top:8px"><button class="btn ghost small" data-action="report-now">📊 Penny'den şimdi günlük rapor iste</button></div>
+    <div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="btn ghost small shrink" data-action="report-now">📊 Penny'den şimdi günlük rapor iste</button><button class="btn ghost small shrink" data-action="pizza">🍕 ${LL('Ekibe pizza ısmarla', 'Order pizza for the team')}</button><button class="btn ghost small shrink" data-action="open" data-view="wallet">💳 ${LL('Cüzdan', 'Wallet')}</button></div>
+    <div class="muted" style="margin-top:4px">${LL('Pizza oyun içi bir ikramdır (kasadan para düşmez): ekip sakinleşir, +3 can, günde bir kez.', 'Pizza is an in-game treat (no money leaves the treasury): the team calms down, +3 HP, once a day.')}</div>
     <h3>ONAY BEKLEYENLER (${pending.length})</h3>
     ${pending.length ? pending.slice(0, 3).map(approvalCard).join('') + (pending.length > 3 ? `<button class="btn ghost small" data-action="open" data-view="approvals">Tümünü gör →</button>` : '') : '<div class="muted">Bekleyen onay yok.</div>'}
     <h3>KASA</h3>
@@ -220,12 +231,23 @@ function approvalCard(a) {
     ${a.expectedReturn ? `<div class="muted">Beklenen getiri: ${esc(a.expectedReturn)}</div>` : ''}
     ${sh.note ? `<div class="muted">🛡️ ${esc(sh.note)}</div>` : ''}
     ${a.kind === 'pc' && pending ? '<div class="warnbox" style="margin-top:6px">🖥️ Onaylarsan bu işlem <b>senin bilgisayarında</b> çalışır. Komutu okumadan onaylama. Yıkıcı komutlar kodda zaten engelli.</div>' : ''}
+    ${(a.kind === 'ad' || a.kind === 'spend') && pending ? realMoneyBox(a) : ''}
     ${a.kind === 'ad' && pending ? '<div class="warnbox" style="margin-top:6px">📢 Onay = kampanyayı reklam panelinde <b>sen kurup ödersin</b>. Tutar ajanın bütçesinden ve kasadan düşer.</div>' : ''}
+    ${a.kind === 'budget' && pending ? `<div class="infobox" style="margin-top:6px">${LL(`💼 Onay = kasadaki <b>serbest bakiyeden</b> (${fmt(S.ledger.free)} ${cur()}) ajana bütçe ayrılır. Para hareketi yok. Ajan bu bütçeyle harcama/reklam önerebilir, ödemeyi yine sen yaparsın.`, `💼 Approve = budget is set aside from the <b>free balance</b> (${fmt(S.ledger.free)} ${cur()}). No money moves. The agent can then propose spends/ads; you still pay.`)}</div>` : ''}
     ${a.kind === 'spend' && pending ? '<div class="warnbox" style="margin-top:6px">Onaylarsan tutar kasadan (defterden) düşer. <b>Ödemeyi sen kendin yaparsın</b>, sistem para göndermez.</div>' : ''}
     ${a.kind === 'publish' && pending ? '<div class="muted" style="margin-top:6px">Onay = içeriği kendin yayınlayacağın anlamına gelir. Ajan otomatik paylaşım yapmaz.</div>' : ''}
     ${a.result ? `<pre>${esc(a.result)}</pre>` : ''}
     ${pending ? `<div class="row" style="margin-top:6px"><input id="ans-${a.id}" placeholder="${a.kind === 'question' ? 'Cevabın (zorunlu değil)' : 'Not (opsiyonel)'}" data-enter="approve" data-id="${a.id}" /><button class="btn green shrink" data-action="approve" data-id="${a.id}">✔ Onayla</button><button class="btn red shrink" data-action="reject" data-id="${a.id}">✕ Reddet</button></div>` : ''}
   </div>`;
+}
+
+function realMoneyBox(a) {
+  if (!safety) loadSafety();
+  const st = safety;
+  const amt = Math.abs(Number(a.payload?.amount) || 0);
+  const over = st && st.today + amt > st.dailyCap;
+  return `<div class="dangerbox">💳 <b>${LL('GERÇEK PARA', 'REAL MONEY')}:</b> ${LL(`Onaylarsan ${money(amt)} tutarını reklam platformunda / mağazada <b>sen kendin ödersin</b>. Getiri garantisi yok.`, `If you approve, <b>you pay ${money(amt)} yourself</b> on the ad platform / store. No guaranteed return.`)}
+    ${st ? `<div style="margin-top:4px">${LL('Bugün', 'Today')}: ${money(st.today)} / ${money(st.dailyCap)} ${LL('günlük limit', 'daily cap')}${over ? ` · <b>${LL('limit aşılıyor', 'over the cap')}</b>` : ''}${st.frozen ? ` · <b>${LL('ZARAR DURDURMA: harcama donduruldu', 'STOP-LOSS: spending frozen')}</b>` : ''}</div>` : ''}</div>`;
 }
 
 VIEWS.approvals = () => {
@@ -239,12 +261,44 @@ VIEWS.approvals = () => {
   };
 };
 
-async function decide(id, approve) {
+async function decide(id, approve, confirmAmount) {
   const answer = document.getElementById(`ans-${id}`)?.value || '';
   try {
-    await api('POST', `/api/approvals/${id}`, { approve, answer });
+    await api('POST', `/api/approvals/${id}`, { approve, answer, confirmAmount });
     toast(approve ? '✔ Onaylandı' : '✕ Reddedildi', approve ? 'done' : 'info');
-  } catch (e) { toast(e.message, 'error'); }
+    safety = null;
+  } catch (e) {
+    if (/^CONFIRM:/.test(e.message)) {
+      const a = S.approvals.get(id);
+      const typed = prompt(e.message.replace(/^CONFIRM:\s*/, ''));
+      if (typed == null) return;
+      if (Number(typed) !== Math.abs(Number(a?.payload?.amount))) return toast(LL('Tutar eşleşmedi, onaylanmadı.', 'Amount did not match; not approved.'), 'error');
+      return decide(id, approve, Number(typed));
+    }
+    toast(e.message, 'error');
+  }
+}
+
+// ---------- gerçek para güvenliği ----------
+let safety = null;
+let safetyLoading = false;
+function loadSafety() {
+  if (safetyLoading) return;
+  safetyLoading = true;
+  api('GET', '/api/safety').then((r) => { safety = r; render(true); }).catch(() => {}).finally(() => { safetyLoading = false; });
+}
+const SAFETY_RULES = () => [
+  [LL('Para senin hesabında kalır', 'Your money stays in your account'), LL('Hustle HQ bankana, kartına ya da cüzdanına bağlanmaz, para çekmez, göndermez. Yüklediğin tutar bir kayıttır; her ödemeyi sen kendin yaparsın.', 'Hustle HQ never connects to your bank, card or wallet and never moves money. A top-up is a record; you make every payment yourself.')],
+  [LL('Kaybetmeyi göze alabileceğin parayı kullan', 'Only use money you can afford to lose'), LL('Yapay zekâ yanılabilir. Kazanç garantisi yoktur. Kira, fatura ya da borç parasını asla koyma.', 'AI can be wrong. No earnings are guaranteed. Never use rent, bill or borrowed money.')],
+  [LL('Her harcama senin onayınla', 'Every spend needs your approval'), LL('Ajanlar sadece önerir. Günlük limit, zarar durdurma ve büyük harcamada tutar teyidi seni korur.', 'Agents only propose. A daily cap, a stop-loss and typed confirmation for large spends protect you.')],
+  [LL('Kart, şifre, 2FA kodu asla', 'Never share cards, passwords or 2FA codes'), LL('Hiçbir ajan bunları istemez. Bir metin isterse yanlıştır: paylaşma.', 'No agent ever needs them. If any text asks for them, it is wrong: do not share.')],
+  [LL('Yayınlamadan önce oku', 'Read before you publish'), LL('Reklam ve gönderilerin sorumluluğu sende: platform kuralları, tüketici ve reklam mevzuatı.', 'You are responsible for every ad and post: platform rules, consumer and advertising law.')],
+  [LL('Sonucu ölç', 'Measure real results'), LL('Gerçek harcamayı ve satışı kaydet. Getirisi olmayan harcamayı kes, para getirmeyen ajanı kov.', 'Record real spend and sales. Cut spending that does not pay back; fire agents who do not earn.')],
+  [LL('Dolandırıcılığa dikkat', 'Watch out for scams'), LL('"Garantili getiri", forex/kripto sinyalleri, para katlama vaatleri dolandırıcılıktır. Borsa masası sadece sanaldır.', '"Guaranteed returns", forex/crypto signals and money-doubling promises are scams. The trading desk is paper only.')],
+  [LL('Vergi ve kayıt', 'Taxes and records'), LL('Gelir vergiye tabi olabilir. Yönetim → Yedek ile kayıtlarını sakla.', 'Income may be taxable. Keep your records with Admin → Backup.')],
+];
+function rulesHtml() {
+  return `<ol class="rules">${SAFETY_RULES().map(([t, d]) => `<li><b>${esc(t)}.</b> ${esc(d)}</li>`).join('')}</ol>`;
 }
 
 // ---------- Görevler ----------
@@ -317,7 +371,9 @@ VIEWS.agent = (id) => {
         <div class="stat"><span class="k">GELİR</span><span class="v green">${fmt(a.stats?.revenue)}</span></div>
         <div class="stat"><span class="k">ÇAĞRI</span><span class="v">${a.stats?.calls || 0}</span></div>
       </div>
-      ${a.role !== 'claude' ? `<div class="row" style="margin:6px 0"><span class="muted shrink">💼 Bütçe: <b style="color:var(--yellow)">${fmt(a.budget)} ${cur()}</b></span><input id="bud-amt" type="number" placeholder="Tutar (− geri al)" /><button class="btn small shrink" data-action="agent-budget" data-id="${id}">Bütçe ver</button></div>` : ''}
+      ${a.role !== 'claude' ? `<div class="row" style="margin:6px 0"><span class="muted shrink">💼 Bütçe: <b style="color:var(--yellow)">${fmt(a.budget)} ${cur()}</b></span><input id="bud-amt" type="number" placeholder="${LL('Tutar (− geri al)', 'Amount (− to take back)')}" /><button class="btn small shrink" data-action="agent-budget" data-id="${id}">Bütçe ver</button></div>` : ''}
+      ${a.role !== 'claude' && a.status !== 'dead' ? `<div class="row" style="margin:6px 0;flex-wrap:wrap"><button class="btn ghost small shrink" data-action="agent-praise" data-id="${id}">😊 ${LL('Öv', 'Praise')}</button><span class="muted">${LL('Kahve için mutfaktaki makineden al, ona götür (E).', 'For coffee: grab one from the kitchen machine and bring it over (E).')}</span></div>` : ''}
+      ${bondsLine(a)}
       ${task ? `<div class="card"><div class="muted">ŞU AN</div><div class="title">${esc(task.title)}</div></div>` : ''}
       ${a.status === 'dead' ? `<div class="warnbox">💀 ${esc(a.deathReason || 'Kovuldu')}. ${S.company?.settings?.autoHire ? 'Yerine yenisi birazdan işe alınacak.' : ''}</div>` : ''}
       <div class="tabs">${a.role === 'claude' ? tabBtn('claude', '⚡ İş ver') : ''}${tabBtn('log', 'Canlı log')}${a.role !== 'claude' ? tabBtn('chat', 'Sohbet') + tabBtn('task', 'Görev ver') + tabBtn('engine', 'Motor') : ''}${tabBtn('work', 'Teslimler')}${tabBtn('look', 'Görünüm')}</div>
@@ -355,6 +411,13 @@ VIEWS.agent = (id) => {
     },
   };
 };
+
+function bondsLine(a) {
+  const b = Object.entries(a.bonds || {}).map(([id, n]) => [S.agents.get(id), n]).filter(([x, n]) => x && x.status !== 'dead' && n > 0).sort((x, y) => y[1] - x[1]).slice(0, 3);
+  const boss = a.bossBond ? ` · ${LL('patronla', 'with boss')} ${'♥'.repeat(Math.min(5, Math.ceil(a.bossBond / 10)))}` : '';
+  if (!b.length && !boss) return '';
+  return `<div class="muted" style="margin:4px 0">🤝 ${LL('Yakın arkadaşları', 'Closest friends')}: ${b.map(([x, n]) => `<a href="#" data-action="open-agent" data-id="${x.id}">${esc(x.name)}</a> (${Math.round(n)})`).join(', ') || '-'}${boss}</div>`;
+}
 
 function appendTerm(e, scroll = true) {
   const term = $('#term');
@@ -540,6 +603,13 @@ function adsHtml() {
 }
 
 // ---------- Kasa ----------
+function ledgerCls(x) {
+  return x.type === 'spend' || x.type === 'withdraw' ? 'neg' : x.type === 'alloc' ? 'muted' : 'pos';
+}
+function ledgerAmt(x) {
+  if (x.type === 'alloc') return `${x.amount < 0 ? '↩ ' : '→ '}${fmt(Math.abs(x.amount))}`;
+  return `${x.type === 'spend' || x.type === 'withdraw' ? '−' : '+'}${fmt(x.amount)}`;
+}
 let ls = null;
 VIEWS.cash = () => {
   if (!ls) api('GET', '/api/lemonsqueezy').then((r) => { ls = r; render(true); }).catch(() => {});
@@ -567,6 +637,7 @@ VIEWS.cash = () => {
       <h3>AJAN BÜTÇELERİ (${fmt(allocSum)} ${cur()} tahsisli)</h3>
       <div class="muted" style="margin-bottom:6px">Ajan panelinden "Bütçe ver" ile kasadan pay ayır. Ajanlar sadece kendi bütçeleri kadar harcama ya da reklam önerebilir. Ödemeyi yine sen yaparsın.</div>
       ${alloc.length ? `<table>${alloc.map((a) => `<tr><td><a href="#" data-action="open-agent" data-id="${a.id}">${esc(a.name)}</a></td><td class="muted">${esc(a.title)}</td><td class="num">${fmt(a.budget)} ${cur()}</td></tr>`).join('')}</table>` : '<div class="muted">Henüz kimseye bütçe verilmedi.</div>'}
+      <div class="infobox">${LL('Bakiye yükleme, ekibe dağıtım, bütçe talepleri ve kâr çekme için', 'For top-ups, team budgets, budget requests and withdrawals open')} <a href="#" data-action="open" data-view="wallet">💳 ${LL('Cüzdan', 'Wallet')}</a>.</div>
       <h3>KASAYA BÜTÇE EKLE</h3>
       <div class="row"><input id="dep-amount" type="number" min="1" placeholder="Tutar" /><input id="dep-note" placeholder="Not (ör. reklam bütçesi)" /><button class="btn shrink" data-action="deposit">Ekle</button></div>
       <h3>GERÇEK GELİR KAYDET</h3>
@@ -575,9 +646,105 @@ VIEWS.cash = () => {
       <div><button class="btn green" data-action="revenue">💰 Gelir kaydet</button></div></div>
       <h3>DEFTER</h3>
       <table><tr><th>Ne zaman</th><th>Tür</th><th>Not</th><th class="num">Tutar</th></tr>
-      ${e.slice(0, 60).map((x) => `<tr><td class="muted">${ago(x.t)}</td><td>${{ deposit: '🏦 Bütçe', spend: '💸 Harcama', revenue: '💰 Gelir' }[x.type]}</td><td>${esc(x.note)}</td><td class="num ${x.type === 'spend' ? 'neg' : 'pos'}">${x.type === 'spend' ? '−' : '+'}${fmt(x.amount)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Boş</td></tr>'}</table>`,
+      ${e.slice(0, 60).map((x) => `<tr><td class="muted">${ago(x.t)}</td><td>${LEDGER_TR[x.type] || x.type}</td><td>${esc(x.note)}</td><td class="num ${ledgerCls(x)}">${ledgerAmt(x)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Boş</td></tr>'}</table>`,
   };
 };
+
+// ---------- Cüzdan (v1.1): yükle, dağıt, talepler, kâr çek ----------
+let wallet = null;
+let walletStale = true;
+let walletLoading = false;
+function loadWallet() {
+  if (walletLoading) return;
+  walletLoading = true;
+  api('GET', '/api/wallet').then((w) => { wallet = w; walletStale = false; render(true); }).catch(() => {}).finally(() => { walletLoading = false; });
+}
+function walletPresets() {
+  return /^(₺|TL|TRY)$/i.test(cur()) ? [500, 1000, 2500, 5000, 10000] : [50, 100, 250, 500, 1000];
+}
+VIEWS.wallet = () => {
+  if (!wallet || walletStale) loadWallet();
+  const w = wallet;
+  if (!w) return { html: '<div class="muted">Yükleniyor…</div>' };
+  const c = cur();
+  const reqs = [...S.approvals.values()].filter((a) => a.kind === 'budget' && a.status === 'pending');
+  const pb = Math.max(0, Math.min(100, w.payback || 0));
+  const team = w.team.filter((t) => t.status !== 'dead' && t.role !== 'shield');
+  const step = walletPresets()[0];
+  return {
+    html: `<div class="warnbox">${LL(
+      '<b>Cüzdan bir kayıt defteridir.</b> Hiçbir banka, kart ya da kripto cüzdanına bağlanmaz; para çekmez, göndermez. Parayı kendi hesabında bu işe ayırır, buraya kaydedersin. Ajanlar bu bütçeyle harcama ve reklam <b>önerir</b>, onaylarsan <b>ödemeyi sen yaparsın</b>. Kazanç garantisi yoktur.',
+      '<b>The wallet is a ledger.</b> It never connects to a bank, card or crypto wallet and never moves money. You set money aside in your own account and record it here. Agents <b>propose</b> spends and ads with their budget; if you approve, <b>you pay</b>. No earnings are guaranteed.')}</div>
+      <div class="grid4">
+        <div class="stat"><span class="k">${LL('KASA', 'TREASURY')}</span><span class="v">${fmt(w.balance)}</span></div>
+        <div class="stat"><span class="k">${LL('SERBEST', 'FREE')}</span><span class="v green">${fmt(w.free)}</span></div>
+        <div class="stat"><span class="k">${LL('AJANLARDA', 'WITH AGENTS')}</span><span class="v">${fmt(w.allocated)}</span></div>
+        <div class="stat"><span class="k">${LL('YATIRILAN', 'INVESTED')}</span><span class="v">${fmt(w.capital)}</span></div>
+        <div class="stat"><span class="k">${LL('GELİR', 'REVENUE')}</span><span class="v green">${fmt(w.revenue)}</span></div>
+        <div class="stat"><span class="k">${LL('HARCAMA', 'SPENT')}</span><span class="v" style="color:var(--red)">${fmt(w.spend - w.refunds)}</span></div>
+        <div class="stat"><span class="k">${LL('NET KÂR', 'NET PROFIT')}</span><span class="v ${w.profit >= 0 ? 'green' : ''}" style="${w.profit < 0 ? 'color:var(--red)' : ''}">${w.profit >= 0 ? '+' : ''}${fmt(w.profit)}</span></div>
+        <div class="stat"><span class="k">${LL('ÇEKİLEN', 'WITHDRAWN')}</span><span class="v">${fmt(w.withdrawn)}</span></div>
+      </div>
+      ${w.capital ? `<div class="muted">${LL(`Yatırdığının <b>%${pb}</b>'i gelir olarak geri döndü · sermaye getirisi ${w.roi >= 0 ? '+' : ''}${w.roi}%`, `<b>${pb}%</b> of what you invested came back as revenue · return on capital ${w.roi >= 0 ? '+' : ''}${w.roi}%`)}</div>
+      <div class="hp" style="height:10px;margin:6px 0 4px"><i style="width:${pb}%;background:linear-gradient(90deg,var(--accent),var(--green))"></i></div>` : ''}
+      <canvas id="wallet-chart" width="560" height="110" style="width:100%;height:110px;margin-top:6px;background:#120f18;border:1px solid var(--line);border-radius:8px"></canvas>
+      <div class="muted" style="font-size:11px">${LL('Son 30 gün: çizgi = kasa, çubuk = günlük gelir', 'Last 30 days: line = treasury, bars = daily revenue')}</div>
+
+      <h3>🏦 ${LL('BAKİYE YÜKLE', 'TOP UP')}</h3>
+      <div style="margin-bottom:8px"><button class="btn green small" data-action="fund-open">💸 ${LL('TL / döviz ile fonla (otomatik çeviri)', 'Fund in TRY / any currency (auto-convert)')}</button></div>
+      <div class="presets">${walletPresets().map((n) => `<button data-action="wallet-preset" data-amt="${n}">+${fmt(n)} ${esc(c)}</button>`).join('')}</div>
+      <div class="row"><input id="wl-amt" type="number" min="1" placeholder="${LL('Tutar', 'Amount')}" /><select id="wl-method" class="shrink" style="width:150px">${[['bank', LL('Banka havalesi', 'Bank transfer')], ['card', LL('Kart', 'Card')], ['cash', LL('Nakit', 'Cash')], ['other', LL('Diğer', 'Other')]].map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></div>
+      <div class="row" style="margin-top:6px"><input id="wl-note" placeholder="${LL('Not (ör. ekim ayı reklam sermayesi)', 'Note (e.g. October ad capital)')}" /><button class="btn shrink" data-action="wallet-topup">🏦 ${LL('Yükle (kaydet)', 'Top up (record)')}</button></div>
+      <div class="muted" style="margin-top:4px">${LL('İpucu: lobideki ATM’den de yükleyebilirsin. Zırhlı araç parayı kasaya taşır.', 'Tip: you can also top up at the lobby ATM. An armored van carries it to the safe.')}</div>
+
+      <h3>💼 ${LL('EKİBE DAĞIT', 'FUND THE TEAM')}</h3>
+      <div class="row"><input id="ws-amt" type="number" min="1" placeholder="${LL(`Tutar (serbest: ${fmt(w.free)})`, `Amount (free: ${fmt(w.free)})`)}" /><select id="ws-mode" class="shrink" style="width:170px"><option value="performance">${LL('Performansa göre', 'By performance')}</option><option value="equal">${LL('Eşit', 'Equal')}</option></select><button class="btn shrink" data-action="wallet-split">${LL('Dağıt', 'Split')}</button></div>
+      <div class="muted" style="margin-top:4px">${LL('Performans: gelir, puan, seviye ve teslim sayısı yüksek olana daha çok. Denetçi (Shield) bütçe kullanmaz.', 'Performance: more for higher revenue, rating, level and deliveries. Shield (compliance) does not use a budget.')}</div>
+
+      <h3>📨 ${LL('BÜTÇE TALEPLERİ', 'BUDGET REQUESTS')} (${reqs.length})</h3>
+      ${reqs.map(approvalCard).join('') || `<div class="muted">${LL('Bekleyen talep yok. Bütçesi biten ajanlar buraya talep düşer ve masana yürür.', 'No pending requests. Agents who run out of budget file a request here and walk to your desk.')}</div>`}
+
+      <h3>👥 ${LL('AJAN BÜTÇELERİ & GETİRİ', 'AGENT BUDGETS & RETURNS')}</h3>
+      <table><tr><th>${LL('Ajan', 'Agent')}</th><th class="num">${LL('Bütçe', 'Budget')}</th><th class="num">${LL('Verilen', 'Given')}</th><th class="num">${LL('Harcanan', 'Spent')}</th><th class="num">${LL('Getirdi', 'Earned')}</th><th class="num">ROI</th><th></th></tr>
+      ${team.map((t) => `<tr><td><a href="#" data-action="open-agent" data-id="${t.id}">${esc(t.name)}</a> <span class="muted">Lv${t.level}</span></td><td class="num" style="color:var(--yellow)">${fmt(t.budget)}</td><td class="num">${fmt(t.given)}</td><td class="num">${fmt(t.spent)}</td><td class="num pos">${fmt(t.revenue)}</td><td class="num ${t.roi == null ? '' : t.roi >= 0 ? 'pos' : 'neg'}">${t.roi == null ? '-' : t.roi + '%'}</td><td style="white-space:nowrap"><button class="btn ghost small" data-action="wallet-give" data-id="${t.id}" data-amt="${step}">+${fmt(step)}</button>${t.budget > 0 ? ` <button class="btn ghost small" data-action="wallet-give" data-id="${t.id}" data-amt="${-t.budget}" title="${LL('Hepsini geri al', 'Take it all back')}">↩</button>` : ''}</td></tr>`).join('')}</table>
+
+      <h3>🏧 ${LL('KÂR ÇEK', 'WITHDRAW PROFIT')}</h3>
+      <div class="row"><input id="ww-amt" type="number" min="1" placeholder="${LL(`Tutar (en fazla ${fmt(w.free)})`, `Amount (max ${fmt(w.free)})`)}" /><input id="ww-note" placeholder="${LL('Not', 'Note')}" /><button class="btn shrink" data-action="wallet-withdraw">🏧 ${LL('Çek (kaydet)', 'Withdraw (record)')}</button></div>
+      <div class="muted" style="margin-top:4px">${LL('Kendi hesabına aldığın kârı deftere işler. Ajanlara ayrılmış bütçe çekilemez; önce geri al.', 'Records profit you took into your own account. Budget allocated to agents cannot be withdrawn; take it back first.')}</div>
+
+      <h3>📒 ${LL('SON HAREKETLER', 'RECENT ACTIVITY')}</h3>
+      <table>${w.recent.slice(0, 25).map((x) => `<tr><td class="muted">${ago(x.t)}</td><td>${LEDGER_TR[x.type] || x.type}</td><td>${esc(x.note)}</td><td class="num ${ledgerCls(x)}">${ledgerAmt(x)}</td></tr>`).join('') || `<tr><td class="muted">${LL('Henüz hareket yok', 'No activity yet')}</td></tr>`}</table>`,
+    after: () => drawWalletChart(w),
+  };
+};
+
+function drawWalletChart(w) {
+  const c = document.getElementById('wallet-chart');
+  if (!c || !w?.series?.length) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W2 = c.clientWidth * dpr, H2 = c.clientHeight * dpr;
+  c.width = W2; c.height = H2;
+  const g = c.getContext('2d');
+  const pad = 10 * dpr;
+  const xs = (i) => pad + (i / (w.series.length - 1)) * (W2 - pad * 2);
+  const maxB = Math.max(1, ...w.series.map((d) => Math.abs(d.balance)));
+  const maxR = Math.max(1, ...w.series.map((d) => d.revenue));
+  g.fillStyle = '#2ecc7155';
+  const bw = Math.max(2, (W2 - pad * 2) / w.series.length - 2 * dpr);
+  w.series.forEach((d, i) => { if (d.revenue) { const h = (d.revenue / maxR) * (H2 * 0.45); g.fillRect(xs(i) - bw / 2, H2 - pad - h, bw, h); } });
+  g.strokeStyle = '#ff8a50';
+  g.lineWidth = 2 * dpr;
+  g.beginPath();
+  w.series.forEach((d, i) => { const y = H2 - pad - ((d.balance + maxB) / (2 * maxB)) * (H2 - pad * 2); i ? g.lineTo(xs(i), y) : g.moveTo(xs(i), y); });
+  g.stroke();
+  g.strokeStyle = '#ffffff22';
+  g.lineWidth = 1;
+  const zero = H2 - pad - 0.5 * (H2 - pad * 2);
+  g.beginPath(); g.moveTo(pad, zero); g.lineTo(W2 - pad, zero); g.stroke();
+  g.fillStyle = '#9a93ad';
+  g.font = `${10 * dpr}px Inter, sans-serif`;
+  g.fillText(`${fmt(w.series.at(-1).balance)} ${cur()}`, W2 - pad - 80 * dpr, pad + 10 * dpr);
+}
 
 // ---------- Borsa ----------
 let pf = null;
@@ -587,12 +754,12 @@ VIEWS.market = () => {
   return {
     html: `<div class="warnbox"><b>Simülasyon.</b> Gerçek para yok, hiçbir aracı kuruma bağlanmaz. Penny (CFO) stratejilerini burada sanal sermayeyle dener. <b>Yatırım tavsiyesi değildir.</b> Fiyatlar Yahoo Finance'ten gecikmeli gelir (BIST için .IS: THYAO.IS); erişilemezse simüle edilir.</div>
       ${p ? `<div class="grid4">
-        <div class="stat"><span class="k">DEĞER ₺</span><span class="v">${fmt(p.value)}</span></div>
+        <div class="stat"><span class="k">${LL('DEĞER', 'VALUE')} ${esc(p.baseSymbol || '₺')}</span><span class="v">${fmt(p.value)}</span></div>
         <div class="stat"><span class="k">NAKİT</span><span class="v">${fmt(p.cash)}</span></div>
         <div class="stat"><span class="k">K/Z</span><span class="v ${p.pnl >= 0 ? 'green' : ''}" style="${p.pnl < 0 ? 'color:var(--red)' : ''}">${p.pnl >= 0 ? '+' : ''}${fmt(p.pnl)}</span></div>
         <div class="stat"><span class="k">BAŞLANGIÇ</span><span class="v">${fmt(p.startCapital)}</span></div></div>
       <h3>POZİSYONLAR</h3>
-      <table><tr><th>Sembol</th><th class="num">Adet</th><th class="num">Ort. ₺</th><th class="num">Fiyat</th><th class="num">K/Z ₺</th></tr>${p.positions.map((x) => `<tr><td>${esc(x.sym)} ${x.source === 'sim' ? '<span class="chip">sim</span>' : ''}</td><td class="num">${x.qty}</td><td class="num">${x.avg.toFixed(2)}</td><td class="num">${x.price} ${esc(x.currency || '')}</td><td class="num ${x.pnl >= 0 ? 'pos' : 'neg'}">${x.pnl.toFixed(2)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Pozisyon yok</td></tr>'}</table>
+      <table><tr><th>Sembol</th><th class="num">Adet</th><th class="num">${LL('Ort.', 'Avg')} ${esc(p.baseSymbol || '₺')}</th><th class="num">Fiyat</th><th class="num">${LL('K/Z', 'P/L')} ${esc(p.baseSymbol || '₺')}</th></tr>${p.positions.map((x) => `<tr><td>${esc(x.sym)} ${x.source === 'sim' ? '<span class="chip">sim</span>' : ''}</td><td class="num">${x.qty}</td><td class="num">${x.avg.toFixed(2)}</td><td class="num">${x.price} ${esc(x.currency || '')}</td><td class="num ${x.pnl >= 0 ? 'pos' : 'neg'}">${x.pnl.toFixed(2)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Pozisyon yok</td></tr>'}</table>
       <h3>SANAL İŞLEM (patron)</h3>
       <div class="row"><input id="mt-sym" placeholder="AAPL" /><select id="mt-side" class="shrink" style="width:90px"><option value="buy">AL</option><option value="sell">SAT</option></select><input id="mt-qty" type="number" min="1" placeholder="Adet" /><button class="btn shrink" data-action="market-trade">İşlem</button></div>
       <h3>SON İŞLEMLER</h3>
@@ -638,14 +805,37 @@ VIEWS.settings = () => {
       <h3>GÖRSEL EFEKTLER</h3>
       <div class="row"><button class="btn small ${getScanlines() ? '' : 'ghost'}" data-action="fx-scan">📺 CRT tarama çizgileri: ${getScanlines() ? 'AÇIK' : 'KAPALI'}</button><button class="btn small ${getReduceFx() ? '' : 'ghost'}" data-action="fx-reduce">🌙 Efektleri azalt: ${getReduceFx() ? 'AÇIK' : 'KAPALI'}</button></div>
       <div class="muted" style="margin-top:4px">"Efektleri azalt" vinyeti ve sinematik şeritleri kapatır; zayıf bilgisayarlar ve uzun oturumlar için.</div>
+      <h3>🛡️ ${LL('GERÇEK PARA GÜVENLİĞİ', 'REAL-MONEY SAFETY')}</h3>
+      ${safetyAdmin()}
+      <h3>${LL('DÜNYA & HAVA DURUMU', 'WORLD & WEATHER')}</h3>
+      <div class="row"><label class="muted">${LL('Hava', 'Weather')}<select id="set-wx">${[['auto', LL('Otomatik (mevsime göre simülasyon)', 'Automatic (seasonal simulation)')], ['real', LL('Gerçek hava (şehir)', 'Real weather (city)')], ['clear', '☀️'], ['cloudy', '☁️'], ['rain', '🌧️'], ['storm', '⛈️'], ['snow', '❄️'], ['fog', '🌫️']].map(([k, l]) => `<option value="${k}" ${(s.weather || 'auto') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label><label class="muted">${LL('Şehir', 'City')}<input id="set-city" value="${esc(s.city || '')}" placeholder="Istanbul" /></label><button class="btn small shrink" data-action="weather-save" style="align-self:flex-end">${LL('Kaydet', 'Save')}</button></div>
+      <div class="muted" style="margin-top:4px">${LL('Gerçek hava Open-Meteo’dan (ücretsiz, anahtarsız) gelir; sadece şehir adı gönderilir. Şu an', 'Real weather comes from Open-Meteo (free, no key); only the city name is sent. Now')}: ${weatherIcon()} ${esc(weatherName())} ${weather.temp}°${weather.city ? ' · ' + esc(weather.city) : ''}${weather.error ? ` · <span style="color:#ff9b9b">${esc(weather.error)}</span>` : ''}</div>
       <h3>VERİ</h3>
       <div class="row"><a class="btn ghost small shrink" href="/api/export" download>💾 Yedeği indir (zip)</a><button class="btn red small shrink" data-action="reset-company">🧨 Şirketi sıfırla</button></div>
       <div class="muted" style="margin-top:4px">Yedek; şirket verisini ve workspace dosyalarını içerir, API anahtarlarını içermez. Sıfırlamadan önce otomatik yedek alınır (data/backups).</div>
       <h3>HAKKINDA</h3>
-      <div class="muted">Hustle HQ v1.0 · Veriler <code>data/</code>, ajan çıktıları <code>workspace/</code> klasöründe. Kurallar kodda sabittir: gerçek para transferi, gerçek borsa işlemi, hesap açma ve şifre girişi yoktur.</div>
-      <div style="margin-top:8px"><button class="btn ghost small" data-action="onboarding">Tanıtımı tekrar göster</button></div>`,
+      <div class="muted">Hustle HQ v1.1 · ${LL('Veriler <code>data/</code>, ajan çıktıları <code>workspace/</code> klasöründe. Kurallar kodda sabittir: gerçek para transferi, gerçek borsa işlemi, hesap açma ve şifre girişi yoktur.', 'Data lives in <code>data/</code>, agent output in <code>workspace/</code>. Rules are hard-coded: no real money transfers, no real trading, no account creation and no password entry.')}</div>
+      <div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="btn ghost small shrink" data-action="onboarding">📖 ${LL('Tutorial ve güvenlik kuralları', 'Tutorial & safety rules')}</button><button class="btn red small shrink" data-action="shutdown">⏻ ${LL('Sunucuyu kapat', 'Shut down server')}</button></div>
+      <div class="muted" style="margin-top:4px">${LL('Masaüstü kısayolu sunucuyu arka planda açar; ajanlar pencere kapalıyken de çalışır. Tamamen durdurmak için bu düğmeyi kullan.', 'The desktop shortcut runs the server in the background; agents keep working when the window is closed. Use this button to stop it completely.')}</div>`,
   };
 };
+
+function safetyAdmin() {
+  if (!safety) loadSafety();
+  const st = safety;
+  if (!st) return '<div class="muted">Yükleniyor…</div>';
+  return `<div class="dangerbox">${LL('Onaylanan her harcama ve reklam <b>senin gerçek paran</b>. Bu raylar seni hatalı ya da aşırı harcamadan korur.', 'Every approved spend and ad is <b>your real money</b>. These rails protect you from mistakes and overspending.')}</div>
+    <div class="grid4">
+      <div class="stat"><span class="k">${LL('BUGÜN', 'TODAY')}</span><span class="v">${money(st.today)}</span></div>
+      <div class="stat"><span class="k">${LL('GÜNLÜK LİMİT', 'DAILY CAP')}</span><span class="v">${money(st.dailyCap)}</span></div>
+      <div class="stat"><span class="k">${LL('14 GÜN HARCAMA', '14-DAY SPEND')}</span><span class="v">${money(st.spend14)}</span></div>
+      <div class="stat"><span class="k">${LL('ZARAR DURDURMA', 'STOP-LOSS')}</span><span class="v" style="color:${st.frozen ? 'var(--red)' : 'var(--green)'}">${st.frozen ? LL('DONDU', 'FROZEN') : st.stopLossPct ? `${st.stopLossPct}%` : LL('KAPALI', 'OFF')}</span></div>
+    </div>
+    <div class="row"><label class="muted">${LL('Günlük harcama limiti', 'Daily spend cap')} (${esc(cur())})<input id="sf-cap" type="number" min="0" value="${st.dailyCap}" /></label><label class="muted">${LL('Zarar durdurma (% sermaye, 0 = kapalı)', 'Stop-loss (% of capital, 0 = off)')}<input id="sf-stop" type="number" min="0" max="100" value="${st.stopLossPct}" /></label><label class="muted">${LL('Tutar teyidi eşiği (% kasa)', 'Typed-confirm threshold (% treasury)')}<input id="sf-big" type="number" min="0" max="100" value="${st.bigSpendPct}" /></label></div>
+    <div style="margin-top:8px"><button class="btn small" data-action="safety-save">${LL('Kaydet', 'Save')}</button></div>
+    <div class="muted" style="margin-top:6px">${LL('Zarar durdurma: son 14 günde hiç gelir yokken sermayenin bu yüzdesi kadar harcanırsa yeni harcama onayları kilitlenir.', 'Stop-loss: if this % of your capital is spent in 14 days with zero revenue, new spend approvals are locked.')} ${st.ack ? `· ✅ ${LL('Kurallar onaylandı', 'Rules accepted')} ${ago(st.ack.t)} ${LL('önce', 'ago')}` : ''}</div>
+    <details style="margin-top:8px"><summary>${LL('Güvenlik kuralları', 'Safety rules')}</summary>${rulesHtml()}</details>`;
+}
 
 // ======================= AKSİYONLAR =======================
 function onAction(e) {
@@ -796,6 +986,67 @@ async function runAction(action, el) {
         fsState.preview = { path: p, text: t.length > 20000 ? t.slice(0, 20000) + '\n…[kesildi]' : t };
         return render(true);
       }
+      case 'wallet-preset': $('#wl-amt').value = el.dataset.amt; return;
+      case 'wallet-topup': {
+        const amount = Number(val('wl-amt'));
+        if (!amount) return toast(LL('Tutar yaz', 'Enter an amount'), 'error');
+        if (!confirm(LL(`${fmt(amount)} ${cur()} yükleme deftere kaydedilsin mi? (Sistem para çekmez; bu parayı kendi hesabında ayırdığını kaydedersin.)`, `Record a ${fmt(amount)} ${cur()} top-up? (The system never takes money; you are recording money you set aside yourself.)`))) return;
+        wallet = await api('POST', '/api/wallet/topup', { amount, method: val('wl-method'), note: val('wl-note') });
+        await refreshLedger();
+        return render(true);
+      }
+      case 'wallet-split': {
+        const amount = Number(val('ws-amt'));
+        if (!amount) return toast(LL('Tutar yaz', 'Enter an amount'), 'error');
+        const r = await api('POST', '/api/wallet/distribute', { amount, mode: val('ws-mode') });
+        wallet = r.wallet;
+        toast(`💼 ${r.split.map((x) => `${x.name} +${fmt(x.amount)}`).join(' · ')}`, 'money');
+        await refreshLedger();
+        return render(true);
+      }
+      case 'wallet-withdraw': {
+        const amount = Number(val('ww-amt'));
+        if (!amount) return toast(LL('Tutar yaz', 'Enter an amount'), 'error');
+        if (!confirm(LL(`${fmt(amount)} ${cur()} kâr çekimi deftere kaydedilsin mi?`, `Record a ${fmt(amount)} ${cur()} withdrawal?`))) return;
+        wallet = await api('POST', '/api/wallet/withdraw', { amount, note: val('ww-note') });
+        await refreshLedger();
+        return render(true);
+      }
+      case 'wallet-give': {
+        await api('POST', `/api/agents/${id}/budget`, { amount: Number(el.dataset.amt) });
+        walletStale = true;
+        await refreshLedger();
+        return render(true);
+      }
+      case 'agent-praise': {
+        const r = await api('POST', `/api/agents/${id}/treat`, { kind: 'praise' });
+        toast(r.ok ? LL(`😊 ${S.agents.get(id)?.name} övüldü (+XP, stres ↓)`, `😊 ${S.agents.get(id)?.name} praised (+XP, stress ↓)`) : r.text, r.ok ? 'done' : 'info');
+        return;
+      }
+      case 'fund-go': return fundGo(() => { $('#modal').hidden = true; $('#modal').onclick = null; });
+      case 'fund-open': return showFundModal();
+      case 'safety-save': {
+        safety = await api('POST', '/api/company', { settings: { safety: { dailyCap: val('sf-cap'), stopLossPct: val('sf-stop'), bigSpendPct: val('sf-big') } } }).then(() => api('GET', '/api/safety'));
+        toast(LL('🛡️ Güvenlik ayarları kaydedildi', '🛡️ Safety settings saved'), 'done');
+        return render(true);
+      }
+      case 'shutdown': {
+        if (!confirm(LL('Sunucu kapatılsın mı? Ajanlar durur. Masaüstü kısayolu ile tekrar açabilirsin.', 'Shut down the server? Agents stop. Reopen it with the desktop shortcut.'))) return;
+        await api('POST', '/api/shutdown');
+        document.body.innerHTML = `<div style="display:flex;height:100vh;align-items:center;justify-content:center;font-family:var(--pixel);color:#ff8a50;font-size:20px;text-align:center">HUSTLE HQ<br>${LL('kapatıldı. Bu pencereyi kapatabilirsin.', 'is shut down. You can close this window.')}</div>`;
+        return;
+      }
+      case 'pizza': {
+        const r = await api('POST', '/api/team/pizza');
+        if (!r.ok) toast(`🍕 ${r.text}`, 'info');
+        return;
+      }
+      case 'weather-save': {
+        await api('POST', '/api/company', { settings: { weather: val('set-wx'), city: val('set-city') } });
+        await refreshWeather();
+        toast(`${weatherIcon()} ${weatherName()} ${weather.temp}°${weather.error ? ' · ' + weather.error : ''}`, weather.error ? 'error' : 'done');
+        return render(true);
+      }
       case 'agent-budget': {
         const amount = Number(val('bud-amt'));
         if (!amount) return toast('Tutar yaz', 'error');
@@ -868,7 +1119,7 @@ async function runAction(action, el) {
         });
         return toast('Kaydedildi', 'done');
       case 'pause': await api('POST', '/api/company', { settings: { paused: !S.company.settings.paused } }); return;
-      case 'onboarding': return showOnboarding();
+      case 'onboarding': return showTutorial();
       case 'reset-company': {
         const word = getLang() === 'en' ? 'RESET' : 'SIFIRLA';
         const typed = prompt(`${getLang() === 'en' ? 'This starts a fresh company (an automatic backup is saved first). Type' : 'Şirket sıfırdan başlar (önce otomatik yedek alınır). Onay için yaz:'} ${word}`);
@@ -969,7 +1220,7 @@ export function showSetup() {
         <div class="stack" style="margin:14px 0">
           <label class="muted">Şirket adı<input id="su-name" value="${esc(st.name)}" maxlength="40" /></label>
           <div class="row"><label class="muted">Patron adı<input id="su-boss" value="${esc(st.boss)}" maxlength="20" /></label>
-          <label class="muted shrink" style="width:120px">Para birimi<select id="su-cur">${['₺', '$', '€', '£'].map((c) => `<option ${c === st.currency ? 'selected' : ''}>${c}</option>`).join('')}</select></label></div>
+          <label class="muted shrink" style="width:120px">Para birimi<select id="su-cur">${['$', '₺', '€'].map((c) => `<option ${c === st.currency ? 'selected' : ''}>${c}</option>`).join('')}</select></label></div>
         </div>
         <div class="row"><button class="btn ghost" data-s="back">← Geri</button><button class="btn" data-s="next">Devam →</button></div>`;
     } else if (st.step === 2) {
@@ -1034,6 +1285,7 @@ export function showSetup() {
         try { localStorage.setItem('hq_onboarded', '1'); sessionStorage.removeItem('hq_setup_resume'); } catch {}
         m.hidden = true;
         m.onclick = null;
+        setTimeout(() => showFundModal({ first: true }), 400);
         toast(st.keys ? '✅ Ofis CANLI. İyi kazançlar patron!' : '🟠 DEMO modunda başladın. ⚙️ Motorlar menüsünden anahtar ekleyince ofis canlanır.', 'done');
       }
     } catch (err) {
@@ -1046,8 +1298,180 @@ export function showSetup() {
   draw();
 }
 
-// ======================= ONBOARDING =======================
+// ======================= ŞİRKETİ FONLA (oyuna girişte) =======================
+// TL (ya da başka para birimi) girilir, canlı kurla şirket para birimine (ör. USD) çevrilip deftere yazılır.
+// İstenirse bir kısmı hemen performansa göre ajanlara bütçe olarak dağıtılır ve Max bütçeyi işe koşan planı yapar.
+const ISO = { '$': 'USD', 'US$': 'USD', '₺': 'TRY', 'TL': 'TRY', '€': 'EUR', '£': 'GBP' };
+const SYM = { USD: '$', TRY: '₺', EUR: '€', GBP: '£' };
+const isoOf = (c) => ISO[String(c || '').trim()] || (/^[A-Za-z]{3}$/.test(c || '') ? String(c).toUpperCase() : 'USD');
+export function showFundModal({ first = false } = {}) {
+  if (!S.company?.setupDone) return;
+  const m = $('#modal');
+  if (!m.hidden) { // başka bir pencere açıksa kapanınca göster
+    let tries = 0;
+    const iv = setInterval(() => { if (m.hidden || ++tries > 120) { clearInterval(iv); if (m.hidden) showFundModal({ first }); } }, 1000);
+    return;
+  }
+  if (!(S.company.safetyAck?.v >= 1)) return showTutorial({ thenFund: true }); // önce güvenlik kuralları
+  const target = isoOf(cur());
+  let from = 'TRY';
+  try { from = localStorage.getItem('hq_fund_cur') || 'TRY'; } catch {}
+  if (!['TRY', 'USD', 'EUR'].includes(from)) from = 'TRY';
+  const presets = { TRY: [1000, 5000, 10000, 25000], USD: [50, 100, 250, 500], EUR: [50, 100, 250, 500] };
+  const label = { TRY: LL('TL aktar', 'Transfer TRY'), USD: LL('Dolar aktar', 'Transfer USD'), EUR: LL('Euro aktar', 'Transfer EUR') };
+  const free = S.ledger.free ?? S.ledger.balance;
+  m.hidden = false;
+  m.innerHTML = `<div class="modal-box">
+    <h1>${LL('ŞİRKETİ', 'FUND THE')} <span>${LL('FONLA', 'COMPANY')}</span></h1>
+    <p class="muted">${first ? LL('Ekip hazır. Çalışmaları için bir bütçe koy.', 'Your team is ready. Give them a budget to work with.') : LL(`Hoş geldin patron. Kasada ${fmt(S.ledger.balance)} ${cur()} var, ${fmt(free)} ${cur()} serbest.`, `Welcome back, boss. Treasury: ${money(S.ledger.balance)}, ${money(free)} free.`)} ${LL('Bugün ne kadar koyuyorsun?', 'How much are you putting in today?')}</p>
+    <div class="curtabs" id="fd-tabs">${['TRY', 'USD', 'EUR'].map((c) => `<button data-f="cur" data-v="${c}" class="${c === from ? 'on' : ''}"><b>${SYM[c]}</b>${label[c]}</button>`).join('')}</div>
+    <input type="hidden" id="fd-cur" value="${from}" />
+    <div class="row" style="margin-top:10px"><input id="fd-amt" type="number" min="1" placeholder="${LL('Tutar', 'Amount')}" data-enter="fund-go" style="font-size:18px" /></div>
+    <div class="presets" id="fd-presets"></div>
+    <div class="infobox" id="fd-conv" style="margin-top:8px">${LL('Tutar gir, canlı kurla', 'Enter an amount; it is converted to')} ${target} ${LL('cinsine çevrilir.', 'at the live rate.')}</div>
+    <div class="row" style="flex-wrap:wrap;gap:8px"><label class="muted shrink"><input type="checkbox" id="fd-split" checked style="width:auto" /> ${LL('Hemen işe koş: ajanlara bütçe dağıt (performansa göre)', 'Put it to work now: give agents budgets (by performance)')}</label>
+      <select id="fd-pct" class="shrink" style="width:110px">${[100, 75, 50, 25].map((p) => `<option value="${p}" ${p === 75 ? 'selected' : ''}>${p}%</option>`).join('')}</select></div>
+    <div class="dangerbox" style="margin-top:10px">💳 <b>${LL('GERÇEK PARA', 'REAL MONEY')}.</b> ${LL(
+      'Hustle HQ bankana, kartına ya da cüzdanına <b>bağlanmaz ve para çekmez</b>. Bu, kendi hesabında bu işe ayırdığın parayı kaydeder. Ajanlar bütçeleriyle reklam/harcama <b>önerir</b>; onaylarsan ödemeyi sen yaparsın. Kazanç garantisi yoktur.',
+      'Hustle HQ <b>never connects to your bank, card or wallet and never takes money</b>. This records money you set aside in your own account. Agents <b>propose</b> ads and spends from their budget; if you approve, you pay. No earnings are guaranteed.')}</div>
+    <label class="muted"><input type="checkbox" id="fd-ask" ${localStorage.getItem('hq_fund_ask') === '0' ? '' : 'checked'} style="width:auto" /> ${LL('Oyunu her açtığımda sor', 'Ask me every time I open Hustle HQ')}</label>
+    <div class="row" style="margin-top:12px"><button class="btn ghost" data-f="skip">${LL('Şimdi değil', 'Not now')}</button><button class="btn green" data-f="go">💸 ${LL('Fonla ve başlat', 'Fund & start')}</button></div>
+  </div>`;
+  let rate = null;
+  let timer = null;
+  const drawPresets = () => {
+    const c = $('#fd-cur').value;
+    $('#fd-presets').innerHTML = presets[c].map((n) => `<button data-f="preset" data-v="${n}">${SYM[c]}${fmt(n)}</button>`).join('');
+  };
+  const update = () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const c = $('#fd-cur')?.value;
+      const amt = Number($('#fd-amt')?.value) || 0;
+      const box = $('#fd-conv');
+      if (!box || !c) return;
+      try {
+        rate = await api('GET', `/api/fx?from=${c}&to=${target}`);
+        const conv = amt * rate.rate;
+        const human = rate.from === rate.to ? '' : ` · 1 ${rate.to} = ${(1 / rate.rate).toFixed(rate.rate < 0.2 ? 2 : 4)} ${rate.from} (${LL('canlı', 'live')}, ${rate.source})`;
+        box.innerHTML = amt ? `<b style="font-size:16px">≈ ${SYM[target] || ''}${conv.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${target}</b>${human}` : `${LL('Kur', 'Rate')}${human || ': 1:1'}`;
+      } catch (e) { box.innerHTML = `<span style="color:#ff9b9b">⚠️ ${esc(e.message)}</span>`; rate = null; }
+    }, 250);
+  };
+  drawPresets();
+  update();
+  const close = () => {
+    try { localStorage.setItem('hq_fund_ask', $('#fd-ask')?.checked ? '1' : '0'); } catch {}
+    m.hidden = true;
+    m.onclick = null;
+    m.oninput = null;
+  };
+  m.oninput = (e) => { if (e.target.id === 'fd-amt') update(); };
+  m.onclick = async (e) => {
+    const b = e.target.closest('[data-f]');
+    if (!b) return;
+    const f = b.dataset.f;
+    if (f === 'preset') { $('#fd-amt').value = b.dataset.v; return update(); }
+    if (f === 'cur') {
+      $('#fd-cur').value = b.dataset.v;
+      document.querySelectorAll('#fd-tabs button').forEach((x) => x.classList.toggle('on', x === b));
+      drawPresets();
+      return update();
+    }
+    if (f === 'skip') return close();
+    if (f === 'go') return fundGo(close);
+  };
+  setTimeout(() => $('#fd-amt')?.focus(), 50);
+}
+async function fundGo(close) {
+  const amount = Number($('#fd-amt')?.value);
+  if (!amount) return toast(LL('Tutar yaz', 'Enter an amount'), 'error');
+  const currency = $('#fd-cur').value;
+  const split = $('#fd-split').checked ? Number($('#fd-pct').value) / 100 : 0;
+  try {
+    const btn = document.querySelector('[data-f="go"]');
+    if (btn) { btn.disabled = true; btn.textContent = '…'; }
+    const r = await api('POST', '/api/wallet/fund', { amount, currency, split });
+    try { localStorage.setItem('hq_fund_cur', currency); } catch {}
+    close();
+    const orig = r.fx.from === r.fx.to ? '' : ` (${SYM[r.fx.from] || ''}${fmt(amount)})`;
+    toast(LL(`💸 Kasaya ${fmt(r.converted)} ${cur()} eklendi${orig}`, `💸 ${cur()}${r.converted.toLocaleString('en-US', { maximumFractionDigits: 2 })} added to the treasury${orig}`), 'money');
+    if (r.split?.length) setTimeout(() => toast(`💼 ${r.split.map((x) => `${x.name} +${fmt(x.amount)}`).join(' · ')}`, 'money'), 900);
+    if (r.task) setTimeout(() => toast(LL('🎯 Max bütçeyi işe koşan planı hazırlıyor', '🎯 Max is planning how to put the budget to work'), 'goal'), 1800);
+    walletStale = true;
+    await refreshLedger();
+  } catch (e) {
+    toast(e.message, 'error');
+    const btn = document.querySelector('[data-f="go"]');
+    if (btn) { btn.disabled = false; btn.textContent = `💸 ${LL('Fonla ve başlat', 'Fund & start')}`; }
+  }
+}
+
+// ======================= TUTORIAL (kısa) + GÜVENLİK ONAYI =======================
+export function showTutorial({ thenFund = false } = {}) {
+  const m = $('#modal');
+  m.hidden = false;
+  const steps = [
+    ['👋', LL('Hoş geldin patron', 'Welcome, boss'), LL('10 yapay zekâ çalışanın 7/24 para kazanmak için çalışır. <span class="kbd">WASD</span> ile ofiste yürü, bir ajana yaklaşıp <span class="kbd">E</span> ile konuş.', 'You have 10 AI employees working 24/7 to make money. Walk with <span class="kbd">WASD</span>; walk up to an agent and press <span class="kbd">E</span> to talk.')],
+    ['💸', LL('Fonla ve bütçe dağıt', 'Fund and hand out budgets'), LL('TL, dolar ya da euro yükle; canlı kurla dolara çevrilir. İstersen hemen ajanlara dağıtılır, ya da ajana gidip <b>E → Bütçe</b> ile elden verirsin.', 'Put in TRY, USD or EUR; it is converted to dollars at the live rate. Split it across the team right away, or walk up to an agent and use <b>E → Budget</b>.')],
+    ['🎯', LL('Hedef ver', 'Give a goal'), LL('Masanda <span class="kbd">B</span>: Max hedefi görevlere böler, ekip ürün, satış sayfası, reklam planı çıkarır. Teslimleri puanla: puan ajanın canıdır.', 'At your desk press <span class="kbd">B</span>: Max splits the goal and the team builds products, sales pages and ad plans. Rate deliverables: rating is their HP.')],
+    ['✅', LL('Onayla, sen öde, gerçek satışı kaydet', 'Approve, pay yourself, record real sales'), LL('Reklam, harcama ve paylaşımlar <span class="kbd">Q</span> Onaylar\'a düşer. Onaylarsan <b>sen</b> yayınlar ve ödersin. Satışlar Lemon Squeezy\'den otomatik ya da Kasa\'dan elle girilir; para getirmeyen ajan kovulur.', 'Ads, spends and posts land in <span class="kbd">Q</span> Approvals. If you approve, <b>you</b> publish and pay. Sales come in from Lemon Squeezy automatically or are entered in Treasury; agents that do not earn get fired.')],
+  ];
+  let i = 0;
+  const draw = () => {
+    if (i < steps.length) {
+      const [ic, t, d] = steps[i];
+      m.innerHTML = `<div class="modal-box">
+        <div style="display:flex;gap:6px;margin-bottom:14px">${[...steps, 0].map((_, k) => `<span style="flex:1;height:5px;border-radius:3px;background:${k <= i ? 'var(--accent)' : '#3a3450'}"></span>`).join('')}</div>
+        <div style="font-size:42px">${ic}</div><h1>${esc(t)}</h1><p style="line-height:1.6">${d}</p>
+        <div class="row" style="margin-top:14px"><button class="btn ghost" data-t="skip">${LL('Geç', 'Skip')}</button><button class="btn" data-t="next">${LL('İleri →', 'Next →')}</button></div></div>`;
+      return;
+    }
+    const acked = S.company?.safetyAck?.v >= 1;
+    m.innerHTML = `<div class="modal-box">
+      <div style="display:flex;gap:6px;margin-bottom:14px">${[...steps, 0].map(() => '<span style="flex:1;height:5px;border-radius:3px;background:var(--accent)"></span>').join('')}</div>
+      <h1>🛡️ ${LL('GERÇEK PARA', 'REAL MONEY')} <span>${LL('GÜVENLİK KURALLARI', 'SAFETY RULES')}</span></h1>
+      ${rulesHtml()}
+      <div class="stack" style="margin-top:8px">
+        <label class="muted"><input type="checkbox" class="sf-ok" style="width:auto" ${acked ? 'checked' : ''} /> ${LL('Sadece kaybetmeyi göze alabileceğim parayı kullanacağım.', 'I will only use money I can afford to lose.')}</label>
+        <label class="muted"><input type="checkbox" class="sf-ok" style="width:auto" ${acked ? 'checked' : ''} /> ${LL('Kazanç garantisi olmadığını ve Hustle HQ\'nun para göndermediğini, ödemeleri benim yaptığımı anlıyorum.', 'I understand earnings are not guaranteed, Hustle HQ never moves money, and I make every payment.')}</label>
+        <label class="muted"><input type="checkbox" class="sf-ok" style="width:auto" ${acked ? 'checked' : ''} /> ${LL('Kart bilgisi, şifre ya da 2FA kodunu hiçbir ajana/metne vermeyeceğim.', 'I will never give card details, passwords or 2FA codes to any agent or text.')}</label>
+      </div>
+      <div class="row" style="margin-top:14px"><button class="btn ghost" data-t="back">← ${LL('Geri', 'Back')}</button><button class="btn green" data-t="accept" ${acked ? '' : 'disabled'}>${LL('Kabul ediyorum', 'I accept')}${thenFund ? ` → ${LL('Fonla', 'Fund')}` : ''}</button></div></div>`;
+  };
+  m.onchange = (e) => {
+    if (!e.target.classList.contains('sf-ok')) return;
+    const all = [...m.querySelectorAll('.sf-ok')].every((x) => x.checked);
+    const b = m.querySelector('[data-t="accept"]');
+    if (b) b.disabled = !all;
+  };
+  m.onclick = async (e) => {
+    const b = e.target.closest('[data-t]');
+    if (!b || b.disabled) return;
+    const t = b.dataset.t;
+    if (t === 'next') { i++; return draw(); }
+    if (t === 'back') { i = Math.max(0, i - 1); return draw(); }
+    if (t === 'skip') { i = steps.length; return draw(); } // kurallar atlanamaz
+    if (t === 'accept') {
+      try {
+        await api('POST', '/api/safety/ack');
+        if (S.company) S.company.safetyAck = { v: 1, t: Date.now() };
+        safety = null;
+        try { localStorage.setItem('hq_onboarded', '1'); } catch {}
+        m.hidden = true;
+        m.onclick = m.onchange = null;
+        if (thenFund) setTimeout(() => showFundModal(), 250);
+      } catch (err) { toast(err.message, 'error'); }
+    }
+  };
+  draw();
+}
+
+// ======================= ONBOARDING (eski) =======================
 export function showOnboarding() {
+  return showTutorial();
+}
+function showOnboardingLegacy() {
   const m = $('#modal');
   m.hidden = false;
   m.innerHTML = `<div class="modal-box">

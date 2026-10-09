@@ -134,7 +134,26 @@ export const POI = {
   dog: { x: 61, y: 46 },
   elevator: { x: 50, y: 41 },
   roofElevator: { x: 23, y: 71 },
+  // ---- v1.1 yaşayan dünya
+  atm: { x: 47, y: 41 },
+  safeFront: { x: 15, y: 49 },
+  reception: { x: 44, y: 42 }, // resepsiyon görevlisi / gece bekçisi
+  receptionFront: { x: 44, y: 45 },
+  lobbyDoor: { x: 44, y: 49 },
+  streetDoor: { x: 44, y: 54 },
+  kitchenDoor: { x: 27, y: 40 },
+  // öğle yemeği / pizza: mutfak masalarının etrafı (dir: 0 aşağı, 1 yukarı bakar)
+  lunch: [[21, 44], [28, 44], [21, 48], [28, 48]].flatMap(([x, y]) => [0, 1, 2].flatMap((dx) => [{ x: x + dx, y: y - 1, dir: 0 }, { x: x + dx, y: y + 1, dir: 1 }])),
+  // sohbet köşeleri: iki kişi karşılıklı (a sağa, b sola bakar)
+  chat: [
+    [{ x: 58, y: 16 }, { x: 59, y: 16 }], [{ x: 38, y: 34 }, { x: 39, y: 34 }], [{ x: 24, y: 42 }, { x: 25, y: 42 }],
+    [{ x: 60, y: 43 }, { x: 61, y: 43 }], [{ x: 46, y: 25 }, { x: 47, y: 25 }], [{ x: 74, y: 34 }, { x: 75, y: 34 }],
+  ],
+  // cuma akşamı çatı partisi
+  roofParty: [{ x: 51, y: 72 }, { x: 53, y: 72 }, { x: 51, y: 74 }, { x: 53, y: 74 }, { x: 52, y: 73 }, { x: 43, y: 75 }, { x: 45, y: 75 }, { x: 32, y: 75 }, { x: 36, y: 75 }, { x: 38, y: 73 }],
+  catHome: { x: 65, y: 77 },
 };
+export const STREET = { topWalk: 53.7, bottomWalk: 64.2, laneTop: 57, laneBottom: 59, busStopX: 17, vanX: 39 };
 
 // ---- mobilya
 export const furniture = [];
@@ -288,6 +307,7 @@ add('elevator', 49, 39, { block: [[49, 39, 2, 1]], oy: -18, sortY: 39 * T + 16, 
 add('logoWall', 38, 38, { wallMounted: true, w: 80 });
 add('couch', 38, 48, { block: [[38, 48, 3, 1]], ox: 0, oy: -6, sortY: 48 * T + 4 });
 add('aquarium', 49, 47, { block: [[49, 47, 3, 1]], oy: -10, sortY: 47 * T + 14 });
+add('atm', 47, 39, { block: [[47, 39, 1, 1]], oy: -16, sortY: 39 * T + 16, interact: { id: 'atm', label: 'ATM: bakiye yükle', range: 2, tx: 47, ty: 41 } });
 bigPlant(37, 39);
 bigPlant(52, 44);
 plant(41, 50, 2);
@@ -325,7 +345,8 @@ add('painting', 82, 38, { wallMounted: true, v: 1 });
 
 // ===== SOKAK (dış mekân)
 add('neon', 37, 52, { wallMounted: true, w: 112 });
-for (const x of [3, 9, 15, 21, 27, 33, 54, 60, 66, 72, 78, 84]) add('facadeWindow', x, 52, { wallMounted: true, w: 32 });
+for (const x of [3, 9, 15, 21, 27, 33, 54, 60, 78, 84]) add('facadeWindow', x, 52, { wallMounted: true, w: 32 });
+add('billboard', 66, 51, { wallMounted: true, w: 192, oy: 3 });
 add('glassDoor', 43, 51, { flat: true, w: 64, sortY: 0 });
 for (const [x, y] of [[6, 55], [24, 55], [62, 55], [80, 55], [14, 63], [34, 63], [56, 63], [74, 63]]) add('tree', x, y, { block: [[x, y, 1, 1]], ox: -8, oy: -30, sortY: y * T + 15 });
 for (const [x, y] of [[12, 55], [30, 55], [50, 55], [70, 55], [86, 55], [4, 63], [44, 63], [66, 63], [86, 63]]) add('streetLamp', x, y, { block: [[x, y, 1, 1]], ox: 2, oy: -34, sortY: y * T + 15, light: true });

@@ -2,6 +2,7 @@
 // Fiyat kaynağı: Yahoo Finance (ücretsiz, gecikmeli; BIST .IS destekli), yedek stooq. Erişilemezse deterministik simülasyon ("sim").
 import { load, save, uid } from './store.js';
 import { emit } from './bus.js';
+import { company } from './state.js';
 
 export const portfolio = load('portfolio', {
   startCapital: 100000,
@@ -68,17 +69,58 @@ export async function quote(symRaw) {
   return { sym, ...v };
 }
 
-/** Sanal sermaye ₺ (TRY) cinsindendir; yabancı para birimli fiyatlar canlı kurla çevrilir. */
+// ---- döviz kuru (cüzdan yüklemesinde TL → USD gibi çeviri). Canlı kur yoksa tahmin YAPILMAZ, hata döner.
+const SYMBOL_ISO = { '$': 'USD', 'US$': 'USD', '₺': 'TRY', 'TL': 'TRY', '€': 'EUR', '£': 'GBP', '¥': 'JPY' };
+export function isoOf(cur) {
+  const c = String(cur || '').trim();
+  return SYMBOL_ISO[c] || SYMBOL_ISO[c.toUpperCase()] || (/^[A-Za-z]{3}$/.test(c) ? c.toUpperCase() : 'USD');
+}
+/** 1 birim `from` kaç `to` eder. Örn. fxRate('TRY','USD') ≈ 0.02 */
+export async function fxRate(fromRaw, toRaw) {
+  const from = isoOf(fromRaw), to = isoOf(toRaw);
+  if (from === to) return { from, to, rate: 1, source: 'same', t: Date.now() };
+  // küçük kurlarda (TRY→USD gibi) ters parite daha hassas: USDTRY=49.2712 → 1/49.2712
+  let best = null;
+  for (const [sym, inv] of [[`${to}${from}=X`, true], [`${from}${to}=X`, false]]) {
+    const q = await quote(sym);
+    if (q.source === 'sim' || !(q.price > 0)) continue;
+    const r = { from, to, rate: inv ? 1 / q.price : q.price, source: q.source, t: q.t };
+    if (q.price >= 1) return r;
+    best ||= r;
+  }
+  if (best) return best;
+  throw new Error(`Live exchange rate ${from}→${to} is unavailable right now. Try again in a minute or enter the amount in ${to}.`);
+}
+
+/** Portföyün para birimi. Eski kurulumlar TRY; boş yeni portföy şirket para birimini (ör. USD) alır. */
+function base() {
+  if (!portfolio.base) {
+    const fresh = !portfolio.trades.length && !Object.keys(portfolio.positions).length;
+    if (fresh) {
+      portfolio.base = isoOf(company.currency);
+      if (portfolio.base !== 'TRY' && portfolio.cash === 100000 && portfolio.startCapital === 100000) {
+        portfolio.cash = portfolio.startCapital = 10000;
+        portfolio.watch = ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'AMZN', 'SPY', 'BTC-USD'];
+      }
+    } else portfolio.base = 'TRY';
+    save('portfolio');
+  }
+  return portfolio.base;
+}
+const SYM = { USD: '$', TRY: '₺', EUR: '€', GBP: '£' };
+
+/** Yabancı para birimli fiyatlar canlı kurla portföy para birimine çevrilir. */
 async function toBase(q) {
-  if (!q.currency || q.currency === 'TRY' || q.source === 'sim') return q.price;
-  const fx = await quote(`${q.currency}TRY=X`);
+  const b = base();
+  if (!q.currency || q.currency === b || q.source === 'sim') return q.price;
+  const fx = await quote(`${q.currency}${b}=X`);
   return fx.source === 'sim' ? q.price : q.price * fx.price;
 }
 
 export async function paperTrade({ symbol, side, qty, reason = '', by = 'Penny' }) {
   const q = await quote(symbol);
   const n = Math.floor(Math.abs(Number(qty) || 0));
-  if (!n) throw new Error('adet pozitif tam sayı olmalı');
+  if (!n) throw new Error('qty must be a positive whole number');
   const s = String(side).toLowerCase();
   const unit = await toBase(q);
   const pos = (portfolio.positions[q.sym] ||= { qty: 0, avg: 0 });
@@ -86,7 +128,8 @@ export async function paperTrade({ symbol, side, qty, reason = '', by = 'Penny' 
   if (s === 'buy' || s === 'al') {
     if (cost > portfolio.cash) {
       if (!pos.qty) delete portfolio.positions[q.sym];
-      throw new Error(`yetersiz sanal nakit (${portfolio.cash.toFixed(2)} ₺, gereken ${cost.toFixed(2)} ₺)`);
+      const c = SYM[base()] || base();
+      throw new Error(`not enough paper cash (${c}${portfolio.cash.toFixed(2)}, need ${c}${cost.toFixed(2)})`);
     }
     pos.avg = (pos.avg * pos.qty + cost) / (pos.qty + n);
     pos.qty += n;
@@ -94,7 +137,7 @@ export async function paperTrade({ symbol, side, qty, reason = '', by = 'Penny' 
   } else if (s === 'sell' || s === 'sat') {
     if (n > pos.qty) {
       if (!pos.qty) delete portfolio.positions[q.sym];
-      throw new Error(`elde ${pos.qty} adet var`);
+      throw new Error(`only ${pos.qty} shares held`);
     }
     pos.qty -= n;
     portfolio.cash += cost;
@@ -124,8 +167,9 @@ export async function portfolioView() {
     save('portfolio');
   }
   return {
-    disclaimer: 'Simülasyon. Gerçek para yok, yatırım tavsiyesi değildir.',
-    base: 'TRY',
+    disclaimer: 'Simulation. No real money. Not investment advice.',
+    base: base(),
+    baseSymbol: SYM[base()] || base(),
     startCapital: portfolio.startCapital,
     cash: portfolio.cash,
     value,
@@ -139,6 +183,6 @@ export async function portfolioView() {
 
 export function resetPortfolio(capital) {
   const c = Math.max(100, Number(capital) || 100000);
-  Object.assign(portfolio, { startCapital: c, cash: c, positions: {}, trades: [], history: [] });
+  Object.assign(portfolio, { startCapital: c, cash: c, positions: {}, trades: [], history: [], base: isoOf(company.currency) });
   save('portfolio');
 }

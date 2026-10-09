@@ -31,9 +31,16 @@
   - Real sales from **Lemon Squeezy** are imported automatically (read-only).
   - Agents package sellable products as zip files, write ad campaigns and propose spending within the budgets you allocate.
   - Every action that leaves the office goes to your **approval queue** first: posting, spending, installs, risky commands and PC control.
-- **Bilingual** (English and Turkish), mobile touch controls, procedural sound and music, day/night cycle, daily reports, a goal queue, and file browser, backup and reset tools.
+- **Wallet and funding (v1.1)**: on every launch Hustle HQ asks how much you are putting in. Choose **TRY, USD or EUR**; it is converted to your company currency at the live exchange rate and can be split across the team by performance right away. Top up at the lobby **ATM**, hand budgets to agents in person (walk up, **E → Budget**), approve their budget requests, withdraw profit, and track invested capital, payback and ROI per agent.
+- **A living world (v1.1)**: real or simulated weather (rain, storms, snow, fog), a daily rhythm (morning coffee, lunch, tea time, night naps, Friday rooftop party), water-cooler gossip between friends, birthdays with cake, pizza parties, pedestrians, pigeons and buses on the street, a receptionist by day and a guard and cleaner by night, a rooftop cat, an armored van that carries your top-ups to the safe, and customers who walk in when a real sale arrives.
+- **English by default** (Turkish optional), mobile touch controls, procedural sound and music, day/night cycle, daily reports, a goal queue, and file browser, backup and reset tools.
 
 ## 🔒 Safety (hard-coded, cannot be turned off)
+
+> **Real money.** Hustle HQ never connects to your bank, card or crypto wallet and never moves money. Funding records money you set aside in your own account; every ad or purchase an agent proposes is paid **by you**, after you approve it. **No earnings are guaranteed.** Only use money you can afford to lose.
+
+- Before the first top-up you read and accept the **real-money safety rules**.
+- **Daily spend cap**, **stop-loss** (spending freezes if a set share of your capital is spent in 14 days with zero revenue) and **typed confirmation** for large spends. Configure them in Admin → Real-money safety.
 
 - Agents **never** send money, place real trades, create accounts, or enter passwords or card numbers. Matching requests are rejected automatically.
 - The trading desk is a **paper portfolio only** and is not investment advice. The treasury is a **ledger**: when you approve a spend, *you* make the payment.
@@ -51,11 +58,13 @@
 
 | OS | How |
 |---|---|
-| Windows | Double-click `start.bat` |
+| Windows | Run `npm run shortcut` once: a **Hustle HQ** icon appears on your desktop and opens the game in its own window. (Or double-click `start.bat`.) |
 | macOS / Linux | `./start.sh` (run `chmod +x start.sh` once) |
 | Any | `npm install`, then `npm start`, then open http://localhost:3777 |
 
-On first launch a **setup wizard** asks for your language, company name, currency and boss name, then (optionally) your free AI keys and your first goal. That's it.
+On first launch a **setup wizard** asks for your language, company name, currency and boss name, then (optionally) your free AI keys and your first goal. A **short tutorial** and the **safety rules** follow, then you fund the company. That's it.
+
+The desktop shortcut keeps the office running in the background after you close the window (agents work 24/7). Stop it from **Admin → Shut down server**.
 
 ### Free AI keys (2-3 minutes each)
 
@@ -124,6 +133,11 @@ This runs the safety rules, the LLM router (against a fake provider) and a full 
 1. **Node.js 24** kur: https://nodejs.org
 2. Windows'ta `start.bat` dosyasına çift tıkla. Mac ve Linux'ta `./start.sh` çalıştır.
 3. Açılan **kurulum sihirbazında** dili, şirket adını, para birimini ve patron adını gir. İstersen ücretsiz AI anahtarlarını ve ilk hedefini de gir.
+4. Masaüstü kısayolu için bir kez `npm run shortcut` çalıştır. Kısayol oyunu kendi penceresinde açar; pencere kapansa da ofis arka planda çalışır (Yönetim → Sunucuyu kapat).
+
+### Cüzdan ve gerçek para
+
+Her açılışta oyun ne kadar koyacağını sorar: **TL, dolar ya da euro** seç, canlı kurla şirket para birimine çevrilir ve istersen hemen performansa göre ajanlara bütçe olarak dağıtılır. Lobideki ATM'den yükleme, ajana yürüyüp **E → Bütçe** ile elden bütçe verme, bütçe talepleri ve kâr çekme de var. Bu bir **kayıt defteridir**: uygulama bankana bağlanmaz, para çekmez, göndermez. Onayladığın reklam ve harcamaları sen ödersin. Günlük harcama limiti, zarar durdurma ve büyük harcamada tutar teyidi seni korur. **Kazanç garantisi yoktur.**
 
 ### Ücretsiz anahtarlar
 
@@ -138,7 +152,7 @@ OpenRouter (https://openrouter.ai/keys), Gemini (https://aistudio.google.com/api
 
 ### Güvenlik
 
-Ajanlar gerçek para göndermez, gerçek borsada işlem yapmaz, hesap açmaz, şifre veya kart girmez. Borsa masası sanal portföydür, yatırım tavsiyesi değildir. Bilgisayar kontrolü her seferinde onay ister, yıkıcı komutlar kalıcı olarak engellidir. **Gelir garantisi yoktur.** Ajan çıktılarını kullanmadan önce kontrol et.
+İlk yüklemeden önce gerçek para güvenlik kurallarını okuyup onaylarsın. Ajanlar gerçek para göndermez, gerçek borsada işlem yapmaz, hesap açmaz, şifre veya kart girmez. Borsa masası sanal portföydür, yatırım tavsiyesi değildir. Bilgisayar kontrolü her seferinde onay ister, yıkıcı komutlar kalıcı olarak engellidir. **Gelir garantisi yoktur.** Ajan çıktılarını kullanmadan önce kontrol et.
 
 ---
 

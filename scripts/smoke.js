@@ -94,6 +94,71 @@ async function main() {
   const b2 = await post(`/api/agents/${mkt.id}/budget`, { amount: 5000 });
   ok('Kasadan fazla bütçe reddedildi', b2.status === 400);
 
+  // --- cüzdan (v1.1): yükleme, dağıtım, kâr çekme, bütçe talebi — hepsi defter kaydı
+  let w = await postJ('/api/wallet/topup', { amount: 500, method: 'atm', note: 'atm test' });
+  ok('Cüzdan: ATM ile bakiye yüklendi', w.balance === 1500 && w.capital === 1500, `kasa ${w.balance}`);
+  ok('Cüzdan: serbest bakiye = kasa − ajan bütçeleri', w.allocated === 300 && w.free === 1200, `serbest ${w.free}`);
+  const dist = await postJ('/api/wallet/distribute', { amount: 700, mode: 'performance' });
+  ok('Cüzdan: ekibe performansa göre dağıtıldı', dist.split?.length >= 7 && dist.wallet?.free === 500 && dist.wallet?.balance === 1500, `${dist.split?.length} ajan, serbest ${dist.wallet?.free}`);
+  const tooMuch = await post('/api/wallet/withdraw', { amount: 600 });
+  ok('Cüzdan: serbest bakiyeden fazla kâr çekilemez', tooMuch.status === 400);
+  w = await postJ('/api/wallet/withdraw', { amount: 200, note: 'profit' });
+  ok('Cüzdan: kâr çekildi, kasa azaldı', w.balance === 1300 && w.withdrawn === 200 && w.free === 300, `kasa ${w.balance}`);
+  s = await getJ('/api/snapshot');
+  const mktNow = s.agents.find((a) => a.id === mkt.id);
+  const back = await postJ(`/api/agents/${mkt.id}/budget`, { amount: -mktNow.budget });
+  ok('Cüzdan: ajandan bütçe geri alındı', back.budget === 0 && s.ledger.free === 300, `${mktNow.budget} → ${back.budget}`);
+  await postJ('/api/tasks', { title: 'Ad campaign: smoke launch', detail: 'small test', assignee: mkt.id });
+  const budgetReq = await waitFor(async () => {
+    const x = await getJ('/api/snapshot');
+    return x.approvals.find((a) => a.kind === 'budget' && a.status === 'pending') || null;
+  }, 60000);
+  ok('Bütçesiz ajan patrondan bütçe istedi', !!budgetReq, budgetReq?.title || 'zaman aşımı');
+  if (budgetReq) {
+    const d = await postJ(`/api/approvals/${budgetReq.id}`, { approve: true });
+    s = await getJ('/api/snapshot');
+    ok('Bütçe talebi onaylanınca ajana ayrıldı', d.status === 'approved' && s.agents.find((a) => a.id === mkt.id).budget === budgetReq.payload.amount, d.result || '');
+  }
+  const t1 = await postJ(`/api/agents/${mkt.id}/treat`, { kind: 'coffee' });
+  const t2 = await postJ(`/api/agents/${mkt.id}/treat`, { kind: 'coffee' });
+  ok('Patron kahve ısmarladı (bekleme süresi var)', t1.ok === true && t2.ok === false && t2.cooldown > 0);
+  const pz = await postJ('/api/team/pizza');
+  const pz2 = await postJ('/api/team/pizza');
+  ok('Pizza partisi (günde bir)', pz.ok === true && pz.people >= 8 && pz2.ok === false);
+  const world = await getJ('/api/world');
+  // --- gerçek para güvenlik rayları
+  await postJ('/api/tasks', { title: 'Ad campaign: second test', detail: 'within budget', assignee: mkt.id });
+  const adApr = await waitFor(async () => {
+    const x = await getJ('/api/snapshot');
+    return x.approvals.find((a) => a.kind === 'ad' && a.status === 'pending') || null;
+  }, 60000);
+  ok('Bütçeli ajan reklam planını onaya gönderdi', !!adApr, adApr?.title || 'zaman aşımı');
+  if (adApr) {
+    await postJ('/api/company', { settings: { safety: { dailyCap: 10 } } });
+    const capped = await post(`/api/approvals/${adApr.id}`, { approve: true });
+    const capMsg = (await capped.json()).error || '';
+    ok('Günlük harcama limiti aşan reklam onaylanmadı', capped.status === 400 && /DAILY CAP/.test(capMsg), capMsg.slice(0, 60));
+    await postJ('/api/company', { settings: { safety: { dailyCap: 1000, bigSpendPct: 1 } } });
+    const big = await post(`/api/approvals/${adApr.id}`, { approve: true });
+    ok('Büyük harcamada tutar teyidi isteniyor', big.status === 400 && /^CONFIRM:/.test((await big.json()).error || ''));
+    const okd = await postJ(`/api/approvals/${adApr.id}`, { approve: true, confirmAmount: adApr.payload.amount });
+    ok('Tutar yazılınca onaylandı, defterden düştü', okd.status === 'approved');
+    const sf = await getJ('/api/safety');
+    ok('Güvenlik durumu bugünkü harcamayı gösteriyor', sf.today === adApr.payload.amount && sf.dailyCap === 1000);
+  }
+  const noAck = await post('/api/wallet/fund', { amount: 100, currency: 'USD', split: 0.5 });
+  ok('Güvenlik kuralları onaylanmadan fonlama reddedildi', noAck.status === 400);
+  await postJ('/api/safety/ack');
+  const badCur = await post('/api/wallet/fund', { amount: 100, currency: 'GBP' });
+  ok('Sadece TRY / USD / EUR ile aktarım', badCur.status === 400);
+  const fx = await getJ('/api/fx?from=USD&to=$');
+  ok('Kur: aynı para biriminde 1:1', fx.rate === 1 && fx.from === 'USD' && fx.to === 'USD');
+  const fd = await postJ('/api/wallet/fund', { amount: 100, currency: 'USD', split: 0.5 });
+  ok('Girişte fonlama: kasaya yazıldı, yarısı ekibe dağıtıldı, Max plan aldı', fd.converted === 100 && fd.split?.length >= 7 && /^PLAN: Put the new budget to work/.test(fd.task?.title || ''), `${fd.converted} · ${fd.split?.length} ajan`);
+  const pfv = await getJ('/api/portfolio');
+  ok('Sanal portföy şirket para biriminde (USD)', pfv.base === 'USD' && pfv.startCapital === 10000, `${pfv.base} ${pfv.startCapital}`);
+  ok('Dünya: hava durumu (simülasyon)',['clear', 'cloudy', 'rain', 'storm', 'snow', 'fog'].includes(world.weather?.kind) && world.weather.source === 'sim', `${world.weather?.kind} ${world.weather?.temp}°`);
+
   // --- onay kuyruğu
   const pending = await waitFor(async () => {
     const x = await getJ('/api/snapshot');

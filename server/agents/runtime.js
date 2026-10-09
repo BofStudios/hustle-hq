@@ -2,7 +2,7 @@
 import { chat, isDemo } from '../providers/router.js';
 import { num, env } from '../config.js';
 
-const L = (tr, en) => (env.LANG === 'en' ? en : tr);
+const L = (tr, en) => (env.LANG !== 'tr' ? en : tr);
 import {
   agents, company, approvals, tasks, deliverables, openTasksFor, createTask, updateTask, updateAgent,
   agentLog, findAgent, logDecision, persist,
@@ -12,7 +12,7 @@ import { TOOLS } from './tools.js';
 import { systemPrompt, taskPrompt, parseAction } from './prompts.js';
 import { setShieldVerdict } from '../approvals.js';
 import { hardBlockReason } from '../policy.js';
-import { reward, economyTick, gainXp } from '../economy.js';
+import { reward, economyTick, gainXp, bond } from '../economy.js';
 import { writeFile } from './sandbox.js';
 import { emit, toast } from '../bus.js';
 import { uid } from '../store.js';
@@ -23,7 +23,7 @@ const busy = new Set();
 const ACTIVITY_BY_TOOL = {
   web_search: 'research', read_url: 'research', write_file: null, read_file: 'reviewing', list_files: 'reviewing',
   run_command: 'coding', generate_image: 'design', send_message: 'talking', create_task: 'planning', decide: 'planning',
-  escalate: 'talking', request_approval: 'talking', propose_spend: 'analyzing', market_quote: 'trading', paper_trade: 'trading',
+  escalate: 'talking', request_approval: 'talking', request_budget: 'talking', propose_spend: 'analyzing', market_quote: 'trading', paper_trade: 'trading',
   note: 'writing', finish: null,
 };
 
@@ -148,7 +148,7 @@ async function runTask(a, task) {
   updateTask(task, { status: 'doing', attempts: (task.attempts || 0) + 1 });
   if (a.role === 'ceo' && /^(PLAN|STANDUP)/i.test(task.title)) emit('meeting', { by: a.id, title: task.title.replace(/^(PLAN|STANDUP):\s*/i, '') });
   updateAgent(a, { status: 'working', currentTaskId: task.id, bubble: '⚙️', activity: ROLES[a.role].activity });
-  agentLog(a, 'task', `▶ Görev: ${task.title}`);
+  agentLog(a, 'task', L(`▶ Görev: ${task.title}`, `▶ Task: ${task.title}`));
 
   const messages = [
     { role: 'system', content: systemPrompt(a) },
@@ -172,7 +172,7 @@ async function runTask(a, task) {
       });
     } catch (e) {
       if (e.code === 'ALL_COOLING') {
-        agentLog(a, 'sleep', 'Tüm motorların kotası dolu, kanepede uyuyorum 💤');
+        agentLog(a, 'sleep', L('Tüm motorların kotası dolu, kanepede uyuyorum 💤', 'All my engines are out of quota, napping on the couch 💤'));
         updateTask(task, { status: 'todo' });
         updateAgent(a, { status: 'sleeping', bubble: '💤', currentTaskId: null });
         schedule(a, 120 + Math.random() * 120);
@@ -244,8 +244,8 @@ async function runTask(a, task) {
   } else {
     a.stats.failed++;
     const retry = (task.attempts || 1) < 2;
-    updateTask(task, { status: retry ? 'todo' : 'failed', result: 'Adım sınırında sonuç çıkmadı.' });
-    reward(a, -4, `görevi bitiremedi: ${task.title}`);
+    updateTask(task, { status: retry ? 'todo' : 'failed', result: L('Adım sınırında sonuç çıkmadı.', 'No result within the step limit.') });
+    reward(a, -4, L(`görevi bitiremedi: ${task.title}`, `could not finish: ${task.title}`));
     setIdle(a);
   }
 }
@@ -256,10 +256,10 @@ function bubbleFor(action) {
 
 async function finalize(a, task, ctx, out) {
   a.stats.done++;
-  gainXp(a, 10, 'teslim');
+  gainXp(a, 10, L('teslim', 'delivery'));
   updateTask(task, { status: 'done', result: out.summary?.slice(0, 2000) || '', deliverableIds: out.deliverableId ? [out.deliverableId] : [] });
   agentLog(a, 'done', `✅ ${task.title}: ${out.summary?.slice(0, 300) || ''}`);
-  reward(a, 2, 'görev tamamlandı');
+  reward(a, 2, L('görev tamamlandı', 'task completed'));
   updateAgent(a, { bubble: '✅', status: 'idle', currentTaskId: null });
   // görevi veren ajana haber ver ve masasına yürü
   const creator = findAgent(task.createdBy);
@@ -268,6 +268,7 @@ async function finalize(a, task, ctx, out) {
     creator.inbox.push({ from: a.name, t: Date.now(), text: `"${task.title}" bitti: ${(out.summary || '').slice(0, 400)}` });
     updateAgent(creator);
     emit('walk', { agentId: a.id, to: creator.id, reason: 'teslim', text: String(task.title || '').slice(0, 50) });
+    bond(a, creator, 1.5);
   } else if (/^boss$/i.test(task.createdBy)) {
     emit('walk', { agentId: a.id, to: 'boss', reason: 'teslim' });
     toast(`✅ ${a.name}: ${task.title}`, 'done');
@@ -279,7 +280,7 @@ async function finalize(a, task, ctx, out) {
 
 // ---------------- denetim (Shield) ----------------
 async function shieldReview(a, apr) {
-  updateAgent(a, { status: 'working', activity: 'reviewing', bubble: '🛡️', monitor: `denetim: ${apr.title}` });
+  updateAgent(a, { status: 'working', activity: 'reviewing', bubble: '🛡️', monitor: `${L('denetim', 'review')}: ${apr.title}` });
   const block = hardBlockReason(`${apr.title}\n${apr.detail}`);
   if (block) {
     setShieldVerdict(apr, 'block', block);
@@ -305,14 +306,14 @@ async function shieldReview(a, apr) {
     agentLog(a, 'review', `🛡️ ${apr.title} → ${verdict}: ${v?.note || ''}`);
     a.stats.calls++;
   } catch (e) {
-    setShieldVerdict(apr, 'skip', e.code === 'ALL_COOLING' ? 'Denetçi motorları meşgul, patron dikkatli baksın.' : `Denetim hatası: ${e.message}`);
+    setShieldVerdict(apr, 'skip', e.code === 'ALL_COOLING' ? L('Denetçi motorları meşgul, patron dikkatli baksın.', 'Reviewer engines are busy; boss, check this carefully.') : `${L('Denetim hatası', 'Review error')}: ${e.message}`);
   }
   setIdle(a);
 }
 
 // ---------------- patron sohbeti ----------------
 export async function chatWithAgent(a, text) {
-  if (a.status === 'dead') return { reply: '💀 (kovuldu)' };
+  if (a.status === 'dead') return { reply: L('💀 (kovuldu)', '💀 (fired)') };
   agentLog(a, 'boss', `Boss: ${text}`);
   const res = await chat({
     chain: a.chain,
@@ -393,7 +394,7 @@ export function setGoal(text) {
     emit('walk', { agentId: ceo.id, to: 'boss', reason: 'hedef' });
   }
   logDecision('Boss', `Yeni hedef: ${clean}`, '');
-  toast(`🎯 Yeni hedef verildi: ${clean.slice(0, 60)}`, 'goal');
+  toast(L(`🎯 Yeni hedef verildi: ${clean.slice(0, 60)}`, `🎯 New goal set: ${clean.slice(0, 60)}`), 'goal');
   return company.goal;
 }
 

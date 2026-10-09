@@ -124,8 +124,12 @@ export function logDecision(by, title, why = '') {
 }
 
 // ---------- kasa ----------
+// Defter türleri: deposit (+, yükleme/iade), revenue (+), spend (−), withdraw (− patron kâr çekti), alloc (0, ajana bütçe ayırma)
 export function balance() {
-  return ledger.entries.reduce((s, e) => s + (e.type === 'spend' ? -e.amount : e.amount), 0);
+  return ledger.entries.reduce((s, e) => s + (e.type === 'spend' || e.type === 'withdraw' ? -e.amount : e.type === 'alloc' ? 0 : e.amount), 0);
+}
+export function allocatedBudgets() {
+  return agents.filter((a) => a.status !== 'dead').reduce((s, a) => s + (a.budget || 0), 0);
 }
 export function revenueTotal() {
   return ledger.entries.filter((e) => e.type === 'revenue').reduce((s, e) => s + e.amount, 0);
@@ -142,7 +146,7 @@ export function snapshot() {
     tasks: tasks.slice(-300),
     deliverables: deliverables.slice(-200),
     approvals: approvals.filter((a) => a.status === 'pending' || Date.now() - a.createdAt < 3 * 864e5).slice(-100),
-    ledger: { entries: ledger.entries.slice(-200), balance: balance(), revenue: revenueTotal() },
+    ledger: { entries: ledger.entries.slice(-200), balance: Math.round(balance() * 100) / 100, revenue: revenueTotal(), allocated: allocatedBudgets(), free: Math.round((balance() - allocatedBudgets()) * 100) / 100 },
     decisions: decisions.slice(-100),
     graveyard: graveyard.slice(-50),
   };

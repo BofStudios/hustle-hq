@@ -185,3 +185,21 @@ th { color: var(--muted); font-weight: 500; }
 #touch .tbtn-e { right: 26px; bottom: 40px; background: #e05a2b; }
 #touch .tbtn-x { right: 104px; bottom: 22px; width: 52px; height: 52px; font-size: 16px; background: #3a3450; }
 body.touch #hint, body.touch #feed { display: none; }
+
+/* ---------- v1.1 cüzdan & yaşayan dünya ---------- */
+#hud-cash { display: inline-block; transform-origin: left center; }
+#hud-cash.pulse-in { animation: hqPulseIn 1.3s ease-out; }
+#hud-cash.pulse-out { animation: hqPulseOut 1.3s ease-out; }
+@keyframes hqPulseIn { 0% { color: #fff; text-shadow: 0 0 14px #ffd23f; transform: scale(1.3); } 100% { transform: scale(1); } }
+@keyframes hqPulseOut { 0% { color: #ff9b6b; text-shadow: 0 0 14px #ff5a2b; transform: scale(0.85); } 100% { transform: scale(1); } }
+#clock { white-space: nowrap; min-width: 0; }
+td.muted { color: var(--muted); }
+@media (max-width: 760px) { #clock { font-size: 11px; } }
+.dangerbox { background: #e74c3c1c; border: 1px solid #e74c3c88; color: #ffd3cc; border-radius: 8px; padding: 8px 10px; font-size: 12px; margin: 6px 0 10px; }
+.curtabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.curtabs button { background: #120f18; border: 2px solid var(--line); color: var(--text); border-radius: 8px; padding: 10px 6px; font-family: var(--pixel); font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.curtabs button b { font-size: 22px; color: var(--accent-2); }
+.curtabs button.on { border-color: var(--accent); background: #e05a2b22; box-shadow: 0 0 0 1px var(--accent) inset; }
+ol.rules { padding-left: 20px; line-height: 1.55; font-size: 13px; }
+ol.rules li { margin-bottom: 4px; }
+button[disabled] { opacity: .45; cursor: not-allowed; }
