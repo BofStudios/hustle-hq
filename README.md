@@ -31,6 +31,7 @@
   - Real sales from **Lemon Squeezy** are imported automatically (read-only).
   - Agents package sellable products as zip files, write ad campaigns and propose spending within the budgets you allocate.
   - Every action that leaves the office goes to your **approval queue** first: posting, spending, installs, risky commands and PC control.
+- **Strategy engine (v1.2)**: the agents decide *how* to make money. Tell them about yourself (skills, hours, accounts you have) and Max picks 1-3 legal strategies such as freelance services, a video channel, affiliate content, digital products, local business services or a micro-SaaS. The team works on them, your identity-bound steps become to-dos, and strategies that earn nothing are dropped for new ones. Track income per strategy and payouts to your IBAN.
 - **Wallet and funding (v1.1)**: on every launch Hustle HQ asks how much you are putting in. Choose **TRY, USD or EUR**; it is converted to your company currency at the live exchange rate and can be split across the team by performance right away. Top up at the lobby **ATM**, hand budgets to agents in person (walk up, **E → Budget**), approve their budget requests, withdraw profit, and track invested capital, payback and ROI per agent.
 - **A living world (v1.1)**: real or simulated weather (rain, storms, snow, fog), a daily rhythm (morning coffee, lunch, tea time, night naps, Friday rooftop party), water-cooler gossip between friends, birthdays with cake, pizza parties, pedestrians, pigeons and buses on the street, a receptionist by day and a guard and cleaner by night, a rooftop cat, an armored van that carries your top-ups to the safe, and customers who walk in when a real sale arrives.
 - **English by default** (Turkish optional), mobile touch controls, procedural sound and music, day/night cycle, daily reports, a goal queue, and file browser, backup and reset tools.
@@ -134,6 +135,10 @@ This runs the safety rules, the LLM router (against a fake provider) and a full 
 2. Windows'ta `start.bat` dosyasına çift tıkla. Mac ve Linux'ta `./start.sh` çalıştır.
 3. Açılan **kurulum sihirbazında** dili, şirket adını, para birimini ve patron adını gir. İstersen ücretsiz AI anahtarlarını ve ilk hedefini de gir.
 4. Masaüstü kısayolu için bir kez `npm run shortcut` çalıştır. Kısayol oyunu kendi penceresinde açar; pencere kapansa da ofis arka planda çalışır (Yönetim → Sunucuyu kapat).
+
+### Strateji motoru
+
+Para kazanma yolunu ajanlar seçer. **🧭 Strateji** panelinde kendinden bahset (beceriler, diller, haftalık saat, açık hesaplar, risk). Max buna göre 1-3 yasal strateji seçer (freelance, video kanalı, affiliate, dijital ürün, yerel işletme hizmeti, mikro-SaaS…), ekip çalışır, kimlik gerektiren adımlar (hesap açma, ödeme bilgisi, yayın) sana yapılacak olarak düşer. Süresi dolup para getirmeyen strateji bırakılır, yenisi seçilir. Gelirleri strateji bazında, platformdan IBAN'a geçen ödemeleri ayrıca takip edersin.
 
 ### Cüzdan ve gerçek para
 

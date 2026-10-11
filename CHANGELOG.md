@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 — Strategy Engine (2026-10-11)
+
+- **The agents decide how the company makes money.** Max reads your profile (skills, languages, hours per week, accounts you already have, risk) and picks 1-3 strategies from a catalog of 12 legal paths (freelance services, video channel, affiliate content, digital products, local business services, micro-SaaS, mini apps, print-on-demand, newsletter, translation and data work, tutoring, social media for brands) or proposes his own. Each company gets its own mix.
+- Every strategy has a reason, a plan, a KPI, a lead agent and team tasks. Steps that need your identity (opening accounts, payout details, publishing) become **your to-dos**.
+- **Pivot**: when a strategy's review window ends with no income, it is dropped and Max chooses a new one; earning strategies are kept and scaled.
+- **Income by strategy** in TRY, USD or EUR (converted at the live rate); the lead agent is rewarded.
+- **Payouts to your IBAN**: track what moved from platforms to your bank (earned vs paid vs still on platforms). Only a label such as "Bank ****1234" is stored, never the full IBAN. Optional Turkish 20/B note with an estimated 15% withholding.
+- Real-money trading, gambling, MLM, spam and fake reviews are excluded from strategies.
+- Tests: 18 policy + 10 engine + 63 end-to-end checks.
+
 ## 1.1.0 — Wallet & Living World (2026-10-09)
 
 ### Money

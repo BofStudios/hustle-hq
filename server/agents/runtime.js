@@ -16,6 +16,7 @@ import { reward, economyTick, gainXp, bond } from '../economy.js';
 import { writeFile } from './sandbox.js';
 import { emit, toast } from '../bus.js';
 import { uid } from '../store.js';
+import { strategyTick, strategies, CATALOG } from '../strategies.js';
 
 const MAX_STEPS = 8;
 const busy = new Set();
@@ -23,7 +24,7 @@ const busy = new Set();
 const ACTIVITY_BY_TOOL = {
   web_search: 'research', read_url: 'research', write_file: null, read_file: 'reviewing', list_files: 'reviewing',
   run_command: 'coding', generate_image: 'design', send_message: 'talking', create_task: 'planning', decide: 'planning',
-  escalate: 'talking', request_approval: 'talking', request_budget: 'talking', propose_spend: 'analyzing', market_quote: 'trading', paper_trade: 'trading',
+  escalate: 'talking', request_approval: 'talking', request_budget: 'talking', choose_strategy: 'planning', propose_spend: 'analyzing', market_quote: 'trading', paper_trade: 'trading',
   note: 'writing', finish: null,
 };
 
@@ -37,6 +38,8 @@ export function startRuntime() {
   setInterval(loop, 1000);
   setInterval(economyTick, 60000);
   setInterval(dailyReportCheck, 60000);
+  setInterval(() => { try { strategyTick(); } catch (e) { console.error('[strateji]', e.message); } }, 15000);
+  setTimeout(() => { try { strategyTick(); } catch {} }, 4000);
 }
 
 function schedule(a, seconds) {
@@ -139,6 +142,13 @@ function proactiveTask(a) {
       spec = { title: L('Finans raporu + sanal portföy', 'Finance report + paper portfolio'), detail: 'Kasa, gelir ve runway durumu. Hangi işin para getirmesi en olası? Sanal portföyü (paper trading) gözden geçir.' };
       break;
   }
+  // aktif stratejiler varsa boş zamandaki işler de onlara hizmet etsin (her rol kendi parçasını yapar)
+  const live = strategies().filter((s) => s.status !== 'dropped');
+  if (live.length && a.role !== 'ceo' && a.role !== 'cfo' && Math.random() < 0.7) {
+    const s = live[(Math.floor(Date.now() / 60000) + (a.slot || 0)) % live.length];
+    const tpl = CATALOG.find((c) => c.id === s.key)?.tasks?.[a.role];
+    if (tpl) spec = { title: `${s.name}: ${L(tpl[0], tpl[1])}`.slice(0, 140), detail: L(`Strateji: ${s.name}. ${s.why}\nBir önceki çalışmanın üstüne koy, daha somut ve kullanılabilir yap.`, `Strategy: ${s.name}. ${s.why}\nBuild on the previous work; make it more concrete and usable.`) };
+  }
   if (!spec) return null;
   return createTask({ ...spec, assignee: a.id, createdBy: a.name, priority: 1, goalId: company.goal?.id || null });
 }
@@ -146,7 +156,7 @@ function proactiveTask(a) {
 // ---------------- görev çalıştırma ----------------
 async function runTask(a, task) {
   updateTask(task, { status: 'doing', attempts: (task.attempts || 0) + 1 });
-  if (a.role === 'ceo' && /^(PLAN|STANDUP)/i.test(task.title)) emit('meeting', { by: a.id, title: task.title.replace(/^(PLAN|STANDUP):\s*/i, '') });
+  if (a.role === 'ceo' && /^(PLAN|STANDUP|STRATEGY)/i.test(task.title)) emit('meeting', { by: a.id, title: task.title.replace(/^(PLAN|STANDUP|STRATEGY):\s*/i, '') });
   updateAgent(a, { status: 'working', currentTaskId: task.id, bubble: '⚙️', activity: ROLES[a.role].activity });
   agentLog(a, 'task', L(`▶ Görev: ${task.title}`, `▶ Task: ${task.title}`));
 

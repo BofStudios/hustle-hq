@@ -12,6 +12,7 @@ import {
 import { ensureRoster, rateDeliverable, recordRevenue, fire, revive, replace, recordAdResult } from './economy.js';
 import { topUp, withdraw, allocate, distribute, walletView, fund, safetyStatus, acceptSafety } from './wallet.js';
 import { currentWeather, treatById, pizzaParty } from './life.js';
+import { strategyView, setProfile, dropStrategy, setTodo, recordIncome, recordPayout } from './strategies.js';
 import { startRuntime, chatWithAgent, setGoal, dailyReportCheck } from './agents/runtime.js';
 import { decideApproval, pendingCount } from './approvals.js';
 import { providerStatus, isDemo, probeOllama, testProvider, ALIASES } from './providers/router.js';
@@ -162,6 +163,12 @@ route('POST', '/api/wallet/topup', async (b) => { topUp(b.amount, { method: b.me
 route('POST', '/api/wallet/withdraw', async (b) => { withdraw(b.amount, b.note); return walletView(); });
 route('POST', '/api/wallet/distribute', async (b) => ({ split: distribute(b.amount, b.mode === 'performance' ? 'performance' : 'equal'), wallet: walletView() }));
 route('GET', '/api/world', async () => ({ weather: await currentWeather(), t: Date.now() }));
+route('GET', '/api/strategy', () => strategyView());
+route('POST', '/api/strategy/profile', async (b) => { setProfile(b); return strategyView(); });
+route('POST', '/api/strategy/:id/drop', async (b, p) => { dropStrategy(p.id, b.reason, company.boss?.name || 'Boss'); return strategyView(); });
+route('POST', '/api/strategy/:id/todo', async (b, p) => { setTodo(p.id, Number(b.i), !!b.done); return strategyView(); });
+route('POST', '/api/income', async (b) => recordIncome({ amount: b.amount, currency: b.currency, source: b.source, strategyId: b.strategyId || null, note: b.note }));
+route('POST', '/api/payout', async (b) => recordPayout({ amount: b.amount, currency: b.currency, platform: b.platform, account: b.account }));
 route('GET', '/api/fx', async (b, p, q) => fxRate(q.get('from') || 'USD', q.get('to') || company.currency));
 route('POST', '/api/wallet/fund', async (b) => fund({ amount: b.amount, currency: b.currency, split: b.split, note: b.note }));
 route('POST', '/api/ads/:id/result', async (b, p) => {
@@ -192,6 +199,7 @@ route('POST', '/api/setup', async (b) => {
   if (b.currency) company.currency = String(b.currency).trim().slice(0, 4) || company.currency;
   if (b.bossName) company.boss = { ...company.boss, name: String(b.bossName).trim().slice(0, 20) || 'Boss' };
   company.setupDone = true;
+  company.setupAt ||= Date.now();
   persist('company');
   emit('company', company);
   return company;

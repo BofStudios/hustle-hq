@@ -253,7 +253,7 @@ export function walletView() {
   start.setHours(0, 0, 0, 0);
   const from = start.getTime() - 29 * DAY;
   const sorted = [...ledger.entries].sort((a, b) => a.t - b.t);
-  const delta = (e) => (e.type === 'spend' || e.type === 'withdraw' ? -e.amount : e.type === 'alloc' ? 0 : e.amount);
+  const delta = (e) => (e.type === 'spend' || e.type === 'withdraw' ? -e.amount : e.type === 'alloc' || e.type === 'payout' ? 0 : e.amount);
   let run = sorted.filter((e) => e.t < from).reduce((s, e) => s + delta(e), 0);
   const series = [];
   let i = sorted.findIndex((e) => e.t >= from);

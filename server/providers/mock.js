@@ -108,6 +108,20 @@ function roleFlow(role, step, task, meta) {
         if (step === plan.length) return act(L('Planı kayda geçiriyorum.', 'Logging the plan.'), 'decide', { title: `Plan: ${goal.slice(0, 60)}`, why: L('Önce fikir ve araştırma, paralel MVP ve pazarlama. 7 gün içinde ilk satış hedefi.', 'Ideas and research first, MVP and marketing in parallel. First sale within 7 days.') });
         return act(L('Plan dağıtıldı.', 'Plan assigned.'), 'finish', { summary: L(`${plan.length} görev dağıtıldı. Kritik yol: fikir → araştırma → MVP → lansman.`, `${plan.length} tasks assigned. Critical path: idea → research → MVP → launch.`), title: L('Görev planı', 'Task plan') });
       }
+      if (/^STRATEGY/i.test(T)) {
+        // görev metnindeki sıralı listeden ilk ikisini seç (profil + şirket tohumuna göre her şirkette farklı)
+        const ids = [...new Set([...(task?.detail || '').matchAll(/\b(freelance|content|affiliate|digital|local|saas|apps|pod|newsletter|microtasks|tutoring|ugc)\b/g)].map((m) => m[1]))];
+        const pickN = (i) => ids[i] || ['freelance', 'digital'][i];
+        const why = {
+          freelance: L('Patronun becerisi doğrudan satılabilir, sermaye gerekmez, ilk gelir en hızlı burada.', "The boss's skill can be sold directly, needs no capital, fastest first income."),
+          content: L('Hesap zaten açık, içerik birikince reklam ve sponsor geliri büyür.', 'The account already exists; ad and sponsor income grows as content piles up.'),
+          digital: L('Bir kez üret, defalarca sat; ekip ürün çıkarmakta güçlü.', 'Make once, sell many times; the team is strong at shipping products.'),
+          local: L('Yerel işletmelerin acil ihtiyacı var, ilk müşteri birkaç günde gelebilir.', 'Local businesses have urgent needs; the first client can come within days.'),
+        };
+        if (step === 0) return act(L('Patronun profiline en uygun para kazanma yolunu seçiyorum.', "Choosing the money path that fits the boss's profile best."), 'choose_strategy', { strategy: pickN(0), why: why[pickN(0)] || L('Profile en uygun, düşük maliyetli ve hızlı.', 'Best fit for the profile, low cost and fast.'), plan: L('1) Talep araştırması 2) Teklif/ürün hazırlığı 3) Patron yayınlar 4) İlk geliri ölç 5) İşe yarayanı büyüt', '1) Demand research 2) Prepare offer/product 3) Boss publishes 4) Measure first income 5) Scale what works') });
+        if (step === 1 && Math.random() < 0.6) return act(L('Riski dağıtmak için ikinci bir yol açıyorum.', 'Opening a second path to spread the risk.'), 'choose_strategy', { strategy: pickN(1), why: why[pickN(1)] || L('İkinci gelir kaynağı, ilkini tamamlar.', 'A second income stream that complements the first.') });
+        return act(L('Strateji belli, ekip işe koyuldu.', 'Strategy set, the team is on it.'), 'finish', { summary: L('Para kazanma stratejisi seçildi ve işler dağıtıldı. Hesap adımları patronun yapılacaklar listesinde.', "Money-making strategy chosen and work assigned. Account steps are on the boss's to-do list."), title: L('Strateji kararı', 'Strategy decision') });
+      }
       if (/^STANDUP/i.test(T)) {
         const idea = pick(IDEAS());
         if (step === 0) return act(L('En hızlı para getirecek fikri seçip ürüne çeviriyorum.', 'Picking the fastest money idea and turning it into a product.'), 'decide', { title: L(`Odak: ${idea.n}`, `Focus: ${idea.n}`), why: L(`${idea.k} için ${idea.p} ${c}, kanal: ${idea.c}. En kısa sürede ilk satış.`, `${idea.p} ${c} for ${idea.k}, channel: ${idea.c}. First sale ASAP.`) });

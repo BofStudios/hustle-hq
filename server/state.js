@@ -126,7 +126,7 @@ export function logDecision(by, title, why = '') {
 // ---------- kasa ----------
 // Defter türleri: deposit (+, yükleme/iade), revenue (+), spend (−), withdraw (− patron kâr çekti), alloc (0, ajana bütçe ayırma)
 export function balance() {
-  return ledger.entries.reduce((s, e) => s + (e.type === 'spend' || e.type === 'withdraw' ? -e.amount : e.type === 'alloc' ? 0 : e.amount), 0);
+  return ledger.entries.reduce((s, e) => s + (e.type === 'spend' || e.type === 'withdraw' ? -e.amount : e.type === 'alloc' || e.type === 'payout' ? 0 : e.amount), 0);
 }
 export function allocatedBudgets() {
   return agents.filter((a) => a.status !== 'dead').reduce((s, a) => s + (a.budget || 0), 0);

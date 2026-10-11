@@ -4,7 +4,7 @@ export const ROLES = {
     title: 'Genel Müdür / Orkestratör',
     desc: 'Patrondan gelen hedefi parçalara böler, doğru ajana görev atar, ilerlemeyi takip eder, tıkananı patrona eskale eder. Kendisi üretim yapmaz, yönetir. Para getirmeyen işi keser.',
     chain: ['deepseek', 'kimi', 'gemini', 'qwen', 'llama'],
-    tools: ['create_task', 'decide', 'escalate', 'send_message', 'read_file', 'list_files', 'request_budget', 'pc_action', 'note', 'finish'],
+    tools: ['create_task', 'decide', 'choose_strategy', 'escalate', 'send_message', 'read_file', 'list_files', 'request_budget', 'pc_action', 'note', 'finish'],
     activity: 'planning',
     names: ['Max', 'Rex', 'Duke', 'Victor', 'Leo', 'Marcus'],
     look: { skin: 1, hair: 1, hairStyle: 0, shirt: 0, pants: 0, tie: 3, suit: true },

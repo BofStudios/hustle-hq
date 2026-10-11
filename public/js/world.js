@@ -472,6 +472,11 @@ export function initWorld(canvas, h) {
     say(p.agent.id, `Merhaba! Ben ${p.agent.name}, ilk günüm 👋`, 6000);
   });
   on('party', onParty);
+  on('strategy', (p) => {
+    if (p.kind === 'new') { announce(L(`🧭 Yeni strateji: ${p.name}`, `🧭 New strategy: ${p.name}`)); sfx.hire(); }
+    else if (p.kind === 'pivot') { announce(L(`🔁 PİVOT! ${p.name} bırakıldı`, `🔁 PIVOT! ${p.name} dropped`)); sfx.error(); }
+    else if (p.kind === 'scale') { announce(L(`📈 ${p.name} para getiriyor!`, `📈 ${p.name} is making money!`)); sfx.money(); }
+  });
   initLife({
     ctx: () => ctx, room: () => room, bounds: () => roomBounds(room), inRoom: (x, y) => inRoom(x, y), player,
     drawSprite, shadow, pill, text, bubble, announce, openNpcDialog, safeBurst, reduceFx: () => reduceFx,

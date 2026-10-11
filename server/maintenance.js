@@ -51,7 +51,7 @@ export function resetCompany() {
   Object.assign(company, {
     name: 'Hustle HQ', createdAt: Date.now(), goal: null, goalQueue: [], lastReportDay: null,
     settings: { burnPerHour: 2, autoHire: true, proactiveMinutes: 12, paused: false, lang: keepLang },
-    setupDone: false,
+    setupDone: false, strategies: [], profile: undefined, safetyAck: undefined, lastPizzaAt: 0, setupAt: undefined,
   });
   resetPortfolio(portfolio.startCapital || 100000);
   ensureRoster();

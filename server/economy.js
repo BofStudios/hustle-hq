@@ -144,11 +144,11 @@ export function rateDeliverable(d, stars) {
 }
 
 /** Gerçek gelir kaydı. Teslime bağlanırsa ilgili ajan büyük ödül alır, takım da pay alır. */
-export function recordRevenue(amount, note, deliverableId, agentId = null) {
+export function recordRevenue(amount, note, deliverableId, agentId = null, extra = {}) {
   const n = Math.abs(Number(amount) || 0);
   if (!n) throw new Error(L('tutar gerekli', 'amount required'));
   const d = deliverableId ? deliverables.find((x) => x.id === deliverableId) : null;
-  ledger.entries.push({ id: uid('led'), t: Date.now(), type: 'revenue', amount: n, note: String(note || 'Gelir').slice(0, 200), deliverableId: d?.id || null, agentId: d?.agentId || agentId || null });
+  ledger.entries.push({ id: uid('led'), t: Date.now(), type: 'revenue', amount: n, note: String(note || 'Gelir').slice(0, 200), deliverableId: d?.id || null, agentId: d?.agentId || agentId || null, ...extra });
   if (!d && agentId) {
     const ag = agentById(agentId);
     if (ag) {

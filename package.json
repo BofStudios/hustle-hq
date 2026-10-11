@@ -1,6 +1,6 @@
 {
   "name": "hustle-hq",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Pixel-art AI office: 10 always-on AI employees on free models. Make money or get fired.",
   "type": "module",
   "main": "server/index.js",

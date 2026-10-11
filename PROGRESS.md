@@ -70,6 +70,13 @@ Doğrulama: `npm run check` (sahte LLM ile router/parse/cooldown öz-testi) + `n
 - [x] Varsayılan dil İngilizce, İngilizce sızıntı denetimi (DOM + canvas) temiz
 - [x] Masaüstü kısayolu + ikon + arka plan sunucu + "Sunucuyu kapat"; 5 adımlı kısa tutorial
 
+## v1.2 — Strateji Motoru (oturum 6) ✅
+- [x] Profil (beceri, dil, saat, hesaplar, risk, 20/B), 12 stratejilik katalog + özel strateji, şirkete özel tohumlu sıralama
+- [x] Max STRATEGY görevi → choose_strategy → ekibe görevler + patrona yapılacaklar; toplantı ve duyuru
+- [x] Değerlendirme süresi (canlı 14 gün, demo 20 dk): gelir varsa büyüt, yoksa pivot
+- [x] Strateji bazında gelir (TRY/USD/EUR), platformdan IBAN'a ödeme takibi, 20/B tahmini stopaj
+- [x] Testler: 18 + 10 + 63
+
 ## Notlar / sonraki oturuma
 - Oturum 2: Undertale odaları, chibi karakterler, stres, Lemon Squeezy (salt okuma), ajan bütçeleri, reklam kampanyası, PC kontrolü (her işlem onaylı), Undertale diyalog kutusu, kovulma sahnesi, ürün paketleme (zip) eklendi. store.flush artık data/ silinse de çökmez; index.js'de uncaughtException yakalayıcı var.
 - F3-9 bitti (recordAdResult: iade/fazla harcama, ROI, liderlikte ROI sütunu).

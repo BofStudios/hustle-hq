@@ -17,7 +17,7 @@ export function setLang(l) {
 
 // Tam eşleşme: metin düğümünün tamamı (kırpılmış) bu ise değiştirilir. Tek kelimeler burada durur.
 const EXACT = {
-  'Cüzdan': 'Wallet', 'Hedef Ver': 'Set Goal', 'Motorlar': 'Engines', 'Karakterim': 'My Character', 'Kişiler': 'People', 'Görevler': 'Tasks',
+  'Cüzdan': 'Wallet', 'Strateji': 'Strategy', 'Hedef Ver': 'Set Goal', 'Motorlar': 'Engines', 'Karakterim': 'My Character', 'Kişiler': 'People', 'Görevler': 'Tasks',
   'Kararlar': 'Decisions', 'Teslimler': 'Deliverables', 'Dosyalar': 'Files', 'Onaylar': 'Approvals', 'Kasa': 'Treasury',
   'Borsa': 'Market', 'Yönetim': 'Admin', 'KASA': 'CASH', 'GELİR': 'REVENUE', 'EKİP': 'TEAM', 'CANLI': 'LIVE', 'DEMO': 'DEMO',
   'Adet': 'Qty', 'Ajan': 'Agent', 'Bağla': 'Connect', 'Boss': 'Boss', 'Boş': 'Empty', 'Boşta': 'Idle', 'Can': 'HP',

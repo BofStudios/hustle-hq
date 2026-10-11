@@ -30,7 +30,7 @@ let meta = { roles: {}, aliases: {}, providers: [] };
 const STATUS_TR = { idle: 'Boşta', thinking: 'Düşünüyor', working: 'Çalışıyor', sleeping: 'Uyuyor (kota)', dead: 'KOVULDU', oncall: 'Çağrıda bekliyor', walking: 'Yürüyor' };
 const KIND_TR = { idea: '💡 Fikir', report: '📄 Rapor', code: '💻 Kod', image: '🎨 Görsel', product: '📦 Satılık ürün' };
 const APR_TR = { command: '⌨️ Komut', install: '📦 Kurulum', publish: '📣 Yayın', spend: '💸 Harcama', external: '🌐 Dış işlem', open_url: '🔗 URL aç', question: '❓ Soru', pc: '🖥️ PC kontrolü', ad: '📢 Reklam kampanyası', budget: '💼 Bütçe talebi' };
-const LEDGER_TR = { deposit: '🏦 Yükleme', spend: '💸 Harcama', revenue: '💰 Gelir', withdraw: '🏧 Kâr çekme', alloc: '💼 Bütçe ayırma' };
+const LEDGER_TR = { deposit: '🏦 Yükleme', spend: '💸 Harcama', revenue: '💰 Gelir', withdraw: '🏧 Kâr çekme', alloc: '💼 Bütçe ayırma', payout: '🏦 IBAN ödemesi' };
 
 // ======================= BAŞLAT =======================
 export async function initUI() {
@@ -67,7 +67,8 @@ export async function initUI() {
     if (type === 'agent:log' || type === 'tick' || type === 'hp') return;
     scheduleRerender();
   });
-  on('ledger', () => { walletStale = true; scheduleRerender(); });
+  on('ledger', () => { walletStale = true; stratStale = true; scheduleRerender(); });
+  on('strategy', () => { stratStale = true; scheduleRerender(); });
   setInterval(updateHud, 1000);
   updateHud();
 }
@@ -128,7 +129,7 @@ function renderFeed() {
 // ======================= ÇEKMECE =======================
 const TITLES = {
   boss: '🎯 Boss Masası', approvals: '📥 Onay Kuyruğu', tasks: '📋 Görev Panosu', engines: '⚙️ Motorlar & Sağlayıcılar', character: '🧍 Karakterim',
-  people: '👥 Kişiler', files: '🗂️ Dosyalar (workspace)', decisions: '📜 Kararlar', deliverables: '📦 Teslimler', cash: '🏦 Kasa', wallet: '💳 Cüzdan & Yatırım', market: '📈 Borsa Masası (Sanal)', claude: '⚡ Claude Masası', settings: '🛠️ Yönetim',
+  people: '👥 Kişiler', files: '🗂️ Dosyalar (workspace)', decisions: '📜 Kararlar', deliverables: '📦 Teslimler', cash: '🏦 Kasa', wallet: '💳 Cüzdan & Yatırım', strategy: '🧭 Strateji', market: '📈 Borsa Masası (Sanal)', claude: '⚡ Claude Masası', settings: '🛠️ Yönetim',
 };
 const ALIAS_VIEW = { servers: 'engines', whiteboard: 'tasks', archive: 'deliverables', atm: 'wallet' };
 
@@ -604,10 +605,10 @@ function adsHtml() {
 
 // ---------- Kasa ----------
 function ledgerCls(x) {
-  return x.type === 'spend' || x.type === 'withdraw' ? 'neg' : x.type === 'alloc' ? 'muted' : 'pos';
+  return x.type === 'spend' || x.type === 'withdraw' ? 'neg' : x.type === 'alloc' || x.type === 'payout' ? 'muted' : 'pos';
 }
 function ledgerAmt(x) {
-  if (x.type === 'alloc') return `${x.amount < 0 ? '↩ ' : '→ '}${fmt(Math.abs(x.amount))}`;
+  if (x.type === 'alloc' || x.type === 'payout') return `${x.amount < 0 ? '↩ ' : '→ '}${fmt(Math.abs(x.amount))}`;
   return `${x.type === 'spend' || x.type === 'withdraw' ? '−' : '+'}${fmt(x.amount)}`;
 }
 let ls = null;
@@ -746,6 +747,78 @@ function drawWalletChart(w) {
   g.fillText(`${fmt(w.series.at(-1).balance)} ${cur()}`, W2 - pad - 80 * dpr, pad + 10 * dpr);
 }
 
+// ---------- Strateji (v1.2): ajanlar nasıl para kazanılacağına karar verir ----------
+let strat = null;
+let stratStale = true;
+let stratLoading = false;
+function loadStrat() {
+  if (stratLoading) return;
+  stratLoading = true;
+  api('GET', '/api/strategy').then((r) => { strat = r; stratStale = false; render(true); }).catch(() => {}).finally(() => { stratLoading = false; });
+}
+const ACC_LABEL = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram', x: 'X', linkedin: 'LinkedIn', upwork: 'Upwork', fiverr: 'Fiverr', bionluk: 'Bionluk', etsy: 'Etsy', gumroad: 'Gumroad', shopier: 'Shopier', medium: 'Medium', github: 'GitHub', appstore: 'App Store', googleplay: 'Google Play' };
+function curSelect(id) {
+  return `<select id="${id}" class="shrink" style="width:96px">${['TRY', 'USD', 'EUR'].map((c) => `<option value="${c}" ${c === (localStorage.getItem('hq_fund_cur') || 'TRY') ? 'selected' : ''}>${SYM[c]} ${c}</option>`).join('')}</select>`;
+}
+VIEWS.strategy = () => {
+  if (!strat || stratStale) loadStrat();
+  const v = strat;
+  if (!v) return { html: '<div class="muted">Yükleniyor…</div>' };
+  const p = v.profile;
+  const live = v.strategies.filter((s) => s.status !== 'dropped');
+  const dropped = v.strategies.filter((s) => s.status === 'dropped');
+  const empty = !p.skills && !p.accounts.length;
+  const card = (s) => {
+    const lead = [...S.agents.values()].find((a) => a.role === s.lead && a.status !== 'dead');
+    const done = s.todos.filter((t) => t.done).length;
+    const left = s.minutesLeft < 24 * 60 ? `${s.minutesLeft} ${LL('dk', 'min')}` : `${Math.ceil(s.minutesLeft / 1440)} ${LL('gün', 'days')}`;
+    return `<div class="card ${s.status === 'scaling' ? 'pending' : ''}">
+      <div class="row"><div class="title">${s.status === 'scaling' ? '📈' : '🧭'} ${esc(s.name)}</div><span class="chip ${s.income > 0 ? 'ok' : 'info'} shrink">${money(s.income)}</span></div>
+      <div class="muted">${LL('Lider', 'Lead')}: ${esc(lead?.name || s.lead)} · ${LL('seçen', 'chosen by')} ${esc(s.by || 'Max')} ${ago(s.startedAt)} ${LL('önce', 'ago')} · ${LL('değerlendirme', 'review in')} ${left}</div>
+      <div style="margin-top:6px">${esc(s.why)}</div>
+      ${s.plan ? `<pre>${esc(s.plan)}</pre>` : ''}
+      <div class="muted">KPI: ${esc(s.kpi)}</div>
+      <h4 style="margin:8px 0 4px">✅ ${LL('Senin yapacakların', 'Your to-dos')} (${done}/${s.todos.length})</h4>
+      ${s.todos.map((t, i) => `<label class="muted" style="display:block;margin:3px 0"><input type="checkbox" style="width:auto" data-action="strat-todo" data-id="${s.id}" data-i="${i}" ${t.done ? 'checked' : ''}/> ${t.done ? `<s>${esc(t.text)}</s>` : esc(t.text)}</label>`).join('')}
+      <div class="row" style="margin-top:8px"><button class="btn ghost small shrink" data-action="strat-drop" data-id="${s.id}">🔁 ${LL('Bırak (pivot)', 'Drop (pivot)')}</button></div>
+    </div>`;
+  };
+  return {
+    html: `<div class="infobox">${LL(
+      '<b>Para kazanma yolunu ajanlar seçer.</b> Profiline bakıp 1-3 strateji seçerler, işleri dağıtırlar ve süresi dolduğunda para getirmeyeni bırakıp yenisine geçerler. Her şirkette sonuç farklıdır. Kimlik gerektiren adımlar (hesap açmak, ödeme bilgisi, yayınlamak) sana yapılacak olarak düşer. Kazanç garantisi yoktur.',
+      '<b>The agents choose how to make money.</b> They read your profile, pick 1-3 strategies, split the work, and drop what does not earn when its review window ends. Every company ends up different. Steps that need your identity (opening accounts, payout details, publishing) become your to-dos. No earnings are guaranteed.')}</div>
+      ${empty ? `<div class="warnbox">👤 ${LL('Ajanlara kendinden bahset: profilin boşken genel bir yol seçerler.', 'Tell the agents about yourself: with an empty profile they choose a generic path.')}</div>` : ''}
+      <div class="grid4">
+        <div class="stat"><span class="k">${LL('KAZANILAN', 'EARNED')}</span><span class="v green">${money(v.earned)}</span></div>
+        <div class="stat"><span class="k">${LL('IBANA GEÇEN', 'PAID TO IBAN')}</span><span class="v">${money(v.paid)}</span></div>
+        <div class="stat"><span class="k">${LL('PLATFORMDA', 'ON PLATFORMS')}</span><span class="v">${money(v.waiting)}</span></div>
+        <div class="stat"><span class="k">${LL('AKTİF YOL', 'ACTIVE PATHS')}</span><span class="v">${live.length}</span></div>
+      </div>
+      <h3>🧭 ${LL('AKTİF STRATEJİLER', 'ACTIVE STRATEGIES')}</h3>
+      ${live.map(card).join('') || `<div class="muted">${LL('Max şu an stratejiyi düşünüyor… (toplantı odasına bak)', 'Max is working out the strategy right now… (check the meeting room)')}</div>`}
+      <details ${empty ? 'open' : ''} style="margin-top:10px"><summary><b>👤 ${LL('PROFİLİN (ajanlar buna göre seçer)', 'YOUR PROFILE (agents choose from this)')}</b></summary>
+        <div class="stack" style="margin-top:8px">
+          <label class="muted">${LL('Becerilerin', 'Your skills')}<input id="pf-skills" value="${esc(p.skills)}" placeholder="${LL('ör. tasarım, video montaj, İngilizce, Excel', 'e.g. design, video editing, English, Excel')}" /></label>
+          <div class="row"><label class="muted">${LL('Diller', 'Languages')}<input id="pf-lang" value="${esc(p.languages)}" /></label><label class="muted shrink" style="width:130px">${LL('Saat / hafta', 'Hours / week')}<input id="pf-hours" type="number" min="1" max="80" value="${p.hours}" /></label><label class="muted shrink" style="width:150px">${LL('Risk', 'Risk')}<select id="pf-risk">${[['low', LL('Düşük (bedava yollar)', 'Low (free paths)')], ['medium', LL('Orta', 'Medium')], ['high', LL('Yüksek', 'High')]].map(([k, l]) => `<option value="${k}" ${p.risk === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+          <div class="muted">${LL('Açık hesapların', 'Accounts you already have')}</div>
+          <div class="presets">${v.accounts.map((a) => `<label style="display:inline-flex;gap:4px;align-items:center;margin:2px 8px 2px 0"><input type="checkbox" class="pf-acc" value="${a}" style="width:auto" ${p.accounts.includes(a) ? 'checked' : ''}/> ${ACC_LABEL[a] || a}</label>`).join('')}</div>
+          <div class="row"><label class="muted"><input type="checkbox" id="pf-20b" style="width:auto" ${p.special20b ? 'checked' : ''}/> ${LL('20/B istisna belgem ve özel banka hesabım var', 'I have a 20/B exemption certificate and a dedicated bank account (Turkey)')}</label><label class="muted">${LL('Hesap etiketi (tam IBAN yazma)', 'Account label (not the full IBAN)')}<input id="pf-iban" value="${esc(p.ibanLabel)}" placeholder="Bank ****1234" /></label></div>
+          <div><button class="btn small" data-action="strat-profile">${LL('Profili kaydet', 'Save profile')}</button></div>
+          <div class="muted">${LL('Profile en uygun yollar şu an', 'Best fits for this profile right now')}: ${v.ranking.map((r) => esc(v.catalog.find((c) => c.id === r.id)?.name || r.id)).join(' · ')}</div>
+        </div>
+      </details>
+      <h3>💰 ${LL('GERÇEK GELİR KAYDET', 'RECORD REAL INCOME')}</h3>
+      <div class="row"><input id="in-amt" type="number" min="1" placeholder="${LL('Tutar', 'Amount')}" />${curSelect('in-cur')}<input id="in-src" placeholder="${LL('Nereden? (ör. Fiverr, AdSense)', 'From where? (e.g. Fiverr, AdSense)')}" /></div>
+      <div class="row" style="margin-top:6px"><select id="in-str"><option value="">— ${LL('Hangi stratejiden?', 'Which strategy?')} —</option>${v.strategies.map((s) => `<option value="${s.id}">${esc(s.name)}${s.status === 'dropped' ? ` (${LL('bırakıldı', 'dropped')})` : ''}</option>`).join('')}</select><button class="btn green shrink" data-action="income-add">💰 ${LL('Kaydet', 'Record')}</button></div>
+      <div class="muted" style="margin-top:4px">${LL('Gelir stratejiye yazılır, lider ajan ödül alır. Pivot kararı buna göre verilir.', 'Income is credited to the strategy and its lead agent is rewarded. Pivot decisions use it.')}</div>
+      <h3>🏦 ${LL('PLATFORMDAN IBAN’A ÖDEME', 'PAYOUT FROM PLATFORM TO IBAN')}</h3>
+      <div class="row"><input id="po-amt" type="number" min="1" placeholder="${LL('Tutar', 'Amount')}" />${curSelect('po-cur')}<input id="po-plat" placeholder="${LL('Platform (ör. Fiverr)', 'Platform (e.g. Fiverr)')}" /><button class="btn shrink" data-action="payout-add">🏦 ${LL('Kaydet', 'Record')}</button></div>
+      ${p.special20b ? `<div class="warnbox" style="margin-top:6px">${LL(`20/B: tüm hasılatın özel hesaba gelmesi gerekir; banka yatan tutardan nihai vergi olarak ~%15 keser. Tahmini kesinti: <b>${money(v.withholdingEstimate)}</b>. Kapsam ve yıllık sınır için mali müşavirine danış.`, `20/B (Turkey): all income must arrive in the dedicated account; the bank withholds ~15% as final tax. Estimated withholding: <b>${money(v.withholdingEstimate)}</b>. Confirm scope and the yearly limit with your accountant.`)}</div>` : ''}
+      <table style="margin-top:6px">${v.payouts.slice(0, 12).map((x) => `<tr><td class="muted">${ago(x.t)}</td><td>${esc(x.note)}</td><td class="num">${money(x.amount)}</td></tr>`).join('') || `<tr><td class="muted">${LL('Henüz ödeme yok', 'No payouts yet')}</td></tr>`}</table>
+      ${dropped.length ? `<h3>🔁 ${LL('PİVOT GEÇMİŞİ', 'PIVOT HISTORY')}</h3>${dropped.map((s) => `<div class="card"><div class="title">✕ ${esc(s.name)}</div><div class="muted">${esc(s.dropReason || '')} · ${ago(s.droppedAt)} ${LL('önce', 'ago')} · ${money(s.income)}</div></div>`).join('')}` : ''}`,
+  };
+};
+
 // ---------- Borsa ----------
 let pf = null;
 VIEWS.market = () => {
@@ -814,7 +887,7 @@ VIEWS.settings = () => {
       <div class="row"><a class="btn ghost small shrink" href="/api/export" download>💾 Yedeği indir (zip)</a><button class="btn red small shrink" data-action="reset-company">🧨 Şirketi sıfırla</button></div>
       <div class="muted" style="margin-top:4px">Yedek; şirket verisini ve workspace dosyalarını içerir, API anahtarlarını içermez. Sıfırlamadan önce otomatik yedek alınır (data/backups).</div>
       <h3>HAKKINDA</h3>
-      <div class="muted">Hustle HQ v1.1 · ${LL('Veriler <code>data/</code>, ajan çıktıları <code>workspace/</code> klasöründe. Kurallar kodda sabittir: gerçek para transferi, gerçek borsa işlemi, hesap açma ve şifre girişi yoktur.', 'Data lives in <code>data/</code>, agent output in <code>workspace/</code>. Rules are hard-coded: no real money transfers, no real trading, no account creation and no password entry.')}</div>
+      <div class="muted">Hustle HQ v1.2 · ${LL('Veriler <code>data/</code>, ajan çıktıları <code>workspace/</code> klasöründe. Kurallar kodda sabittir: gerçek para transferi, gerçek borsa işlemi, hesap açma ve şifre girişi yoktur.', 'Data lives in <code>data/</code>, agent output in <code>workspace/</code>. Rules are hard-coded: no real money transfers, no real trading, no account creation and no password entry.')}</div>
       <div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="btn ghost small shrink" data-action="onboarding">📖 ${LL('Tutorial ve güvenlik kuralları', 'Tutorial & safety rules')}</button><button class="btn red small shrink" data-action="shutdown">⏻ ${LL('Sunucuyu kapat', 'Shut down server')}</button></div>
       <div class="muted" style="margin-top:4px">${LL('Masaüstü kısayolu sunucuyu arka planda açar; ajanlar pencere kapalıyken de çalışır. Tamamen durdurmak için bu düğmeyi kullan.', 'The desktop shortcut runs the server in the background; agents keep working when the window is closed. Use this button to stop it completely.')}</div>`,
   };
@@ -1025,6 +1098,34 @@ async function runAction(action, el) {
       }
       case 'fund-go': return fundGo(() => { $('#modal').hidden = true; $('#modal').onclick = null; });
       case 'fund-open': return showFundModal();
+      case 'strat-profile': {
+        strat = await api('POST', '/api/strategy/profile', {
+          skills: val('pf-skills'), languages: val('pf-lang'), hours: Number(val('pf-hours')), risk: val('pf-risk'),
+          accounts: [...document.querySelectorAll('.pf-acc:checked')].map((x) => x.value), special20b: $('#pf-20b').checked, ibanLabel: val('pf-iban'),
+        });
+        toast(LL('👤 Profil kaydedildi. Ajanlar sıradaki stratejide bunu kullanır.', '👤 Profile saved. The agents use it for the next strategy.'), 'done');
+        return render(true);
+      }
+      case 'strat-todo': strat = await api('POST', `/api/strategy/${id}/todo`, { i: Number(el.dataset.i), done: el.checked }); return render(true);
+      case 'strat-drop': {
+        if (!confirm(LL('Bu strateji bırakılsın mı? Max yerine yenisini seçer.', 'Drop this strategy? Max will choose a new one.'))) return;
+        strat = await api('POST', `/api/strategy/${id}/drop`, { reason: LL('patron bıraktı', 'dropped by the boss') });
+        return render(true);
+      }
+      case 'income-add': {
+        const amount = Number(val('in-amt'));
+        if (!amount) return toast(LL('Tutar yaz', 'Enter an amount'), 'error');
+        strat = await api('POST', '/api/income', { amount, currency: val('in-cur'), source: val('in-src'), strategyId: val('in-str') || null });
+        await refreshLedger();
+        return render(true);
+      }
+      case 'payout-add': {
+        const amount = Number(val('po-amt'));
+        if (!amount) return toast(LL('Tutar yaz', 'Enter an amount'), 'error');
+        strat = await api('POST', '/api/payout', { amount, currency: val('po-cur'), platform: val('po-plat') });
+        await refreshLedger();
+        return render(true);
+      }
       case 'safety-save': {
         safety = await api('POST', '/api/company', { settings: { safety: { dailyCap: val('sf-cap'), stopLossPct: val('sf-stop'), bigSpendPct: val('sf-big') } } }).then(() => api('GET', '/api/safety'));
         toast(LL('🛡️ Güvenlik ayarları kaydedildi', '🛡️ Safety settings saved'), 'done');
@@ -1414,6 +1515,7 @@ export function showTutorial({ thenFund = false } = {}) {
   const steps = [
     ['👋', LL('Hoş geldin patron', 'Welcome, boss'), LL('10 yapay zekâ çalışanın 7/24 para kazanmak için çalışır. <span class="kbd">WASD</span> ile ofiste yürü, bir ajana yaklaşıp <span class="kbd">E</span> ile konuş.', 'You have 10 AI employees working 24/7 to make money. Walk with <span class="kbd">WASD</span>; walk up to an agent and press <span class="kbd">E</span> to talk.')],
     ['💸', LL('Fonla ve bütçe dağıt', 'Fund and hand out budgets'), LL('TL, dolar ya da euro yükle; canlı kurla dolara çevrilir. İstersen hemen ajanlara dağıtılır, ya da ajana gidip <b>E → Bütçe</b> ile elden verirsin.', 'Put in TRY, USD or EUR; it is converted to dollars at the live rate. Split it across the team right away, or walk up to an agent and use <b>E → Budget</b>.')],
+    ['🧭', LL('Yolu ajanlar seçer', 'The agents choose the path'), LL('<b>🧭 Strategy</b> panelinde kendinden bahset (beceri, saat, açık hesaplar). Max buna göre para kazanma stratejisi seçer, ekip çalışır, para getirmeyen yol bırakılır. Hesap açma gibi kimlik isteyen adımlar sana yapılacak olarak düşer.', 'Tell the agents about yourself in <b>🧭 Strategy</b> (skills, hours, accounts). Max picks money-making strategies from it, the team works, and paths that do not earn get dropped. Steps that need your identity, like opening accounts, become your to-dos.')],
     ['🎯', LL('Hedef ver', 'Give a goal'), LL('Masanda <span class="kbd">B</span>: Max hedefi görevlere böler, ekip ürün, satış sayfası, reklam planı çıkarır. Teslimleri puanla: puan ajanın canıdır.', 'At your desk press <span class="kbd">B</span>: Max splits the goal and the team builds products, sales pages and ad plans. Rate deliverables: rating is their HP.')],
     ['✅', LL('Onayla, sen öde, gerçek satışı kaydet', 'Approve, pay yourself, record real sales'), LL('Reklam, harcama ve paylaşımlar <span class="kbd">Q</span> Onaylar\'a düşer. Onaylarsan <b>sen</b> yayınlar ve ödersin. Satışlar Lemon Squeezy\'den otomatik ya da Kasa\'dan elle girilir; para getirmeyen ajan kovulur.', 'Ads, spends and posts land in <span class="kbd">Q</span> Approvals. If you approve, <b>you</b> publish and pay. Sales come in from Lemon Squeezy automatically or are entered in Treasury; agents that do not earn get fired.')],
   ];

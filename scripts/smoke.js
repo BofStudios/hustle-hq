@@ -181,6 +181,35 @@ async function main() {
   ok('Gerçek gelir kaydedildi', s.ledger.revenue === 250);
   ok('Teslim sahibi ödül aldı (gelir + XP)', ownerAfter.stats.revenue === 250 && (ownerAfter.stats.xp || 0) > (ownerBefore.stats.xp || 0), `xp ${ownerBefore.stats.xp || 0}→${ownerAfter.stats.xp}`);
 
+  // --- strateji motoru (v1.2): ajanlar para kazanma yolunu kendileri seçer
+  const prof = await postJ('/api/strategy/profile', { skills: 'design, video editing, English', hours: 12, accounts: ['fiverr', 'youtube'], risk: 'low', special20b: true, ibanLabel: 'TR33 0006 1005 1978 6457 8413 26' });
+  ok('Strateji: profil kaydedildi, tam IBAN saklanmadı', prof.profile?.accounts?.length === 2 && !/\d{8}/.test(prof.profile.ibanLabel) && /\*\*\*\*/.test(prof.profile.ibanLabel), prof.profile?.ibanLabel);
+  const chosen = await waitFor(async () => {
+    const x = await getJ('/api/strategy');
+    return x.strategies.filter((st) => st.status !== 'dropped').length ? x : null;
+  }, 70000);
+  ok('Strateji: Max kendi başına para kazanma yolu seçti', !!chosen, chosen ? chosen.strategies.map((st) => st.name).join(', ') : 'zaman aşımı');
+  if (chosen) {
+    const st1 = chosen.strategies.find((st) => st.status !== 'dropped');
+    ok('Strateji: patrona kimlik gerektiren yapılacaklar düştü', st1.todos.length >= 1 && st1.todos.every((t) => !t.done));
+    s = await getJ('/api/snapshot');
+    ok('Strateji: ekibe stratejiye özel görevler dağıtıldı', s.tasks.some((t) => t.title.startsWith(`${st1.name}:`)));
+    const revBefore = s.ledger.revenue;
+    const balBefore = s.ledger.balance;
+    const inc = await postJ('/api/income', { amount: 50, currency: 'USD', source: 'Fiverr', strategyId: st1.id });
+    ok('Strateji: gerçek gelir stratejiye yazıldı', inc.strategies.find((x) => x.id === st1.id)?.income === 50 && inc.earned === revBefore + 50);
+    const po = await postJ('/api/payout', { amount: 40, currency: 'USD', platform: 'Fiverr' });
+    s = await getJ('/api/snapshot');
+    ok('IBAN ödemesi: platformda bekleyen azaldı, kasa değişmedi', po.paid === 40 && po.waiting === po.earned - 40 && s.ledger.balance === balBefore + 50, `bekleyen ${po.waiting}`);
+    ok('20/B: tahmini %15 stopaj gösteriliyor', po.withholdingEstimate === 6);
+    for (const st of chosen.strategies.filter((x) => x.status !== 'dropped')) await postJ(`/api/strategy/${st.id}/drop`, { reason: 'test pivot' });
+    const pivot = await waitFor(async () => {
+      const x = await getJ('/api/strategy');
+      return x.strategies.some((st) => st.status !== 'dropped') ? x : null;
+    }, 70000);
+    ok('Pivot: tüm yollar bırakılınca Max yeni strateji seçti', !!pivot && pivot.strategies.filter((st) => st.status === 'dropped').length >= 1, pivot ? pivot.strategies.filter((st) => st.status !== 'dropped').map((st) => st.name).join(', ') : 'zaman aşımı');
+  }
+
   // --- hedef kuyruğu ve rapor
   const q = await postJ('/api/goals/queue', { op: 'add', text: 'Second goal' });
   ok('Hedef kuyruğa eklendi', q.goalQueue?.length === 1);

@@ -6,6 +6,7 @@ import { createApproval } from '../approvals.js';
 import { createTask, findAgent, agentLog, updateAgent, logDecision, addDeliverable, company, approvals } from '../state.js';
 import { bond } from '../economy.js';
 import { env } from '../config.js';
+import { chooseStrategy } from '../strategies.js';
 const EN = () => env.LANG !== 'tr';
 import { quote, paperTrade } from '../market.js';
 import { emit } from '../bus.js';
@@ -25,6 +26,7 @@ export const TOOL_DOCS = {
   decide: 'decide {"title": "karar", "why": "gerekçe"} → kararlar defterine yazar',
   escalate: 'escalate {"question": "patrona soru veya engel", "options": ["A","B"]} → patronun onay masasına düşer',
   request_approval: 'request_approval {"kind": "publish|external|open_url", "title": "...", "detail": "yayınlanacak tam içerik ve nerede", "url": "(open_url için)", "expected_return": "..."}',
+  choose_strategy: 'choose_strategy {"strategy": "freelance|content|affiliate|digital|local|saas|apps|pod|newsletter|microtasks|tutoring|ugc|custom", "name": "(custom ise ad)", "why": "bu patron için neden", "plan": "3-5 adım", "kpi": "başarı ölçüsü", "lead": "(custom ise sorumlu rol)"} → şirketin para kazanma stratejisini seçer, ekibe işleri dağıtır, patrona yapılacakları yazar',
   request_budget: 'request_budget {"amount": 200, "reason": "ne için", "expected_return": "beklenen getiri"} → patrondan bütçe iste; onaylanırsa kasadan sana ayrılır (para hareketi yok, harcamayı yine patron yapar)',
   propose_spend: 'propose_spend {"amount": 100, "item": "ne alınacak", "why": "neden", "expected_return": "beklenen getiri"} → patron onaylarsa kendisi öder',
   package_product: 'package_product {"name": "ürün adı", "files": ["proje/dosya.pdf", "..."], "price": 149, "description": "kime, ne işe yarar, içinde ne var"} → satılabilir zip paketi + README + satış metni üretir, patrona "yükle" onayı gider',
@@ -193,6 +195,10 @@ export const TOOLS = {
     const a = createApproval({ agentId: ctx.agent.id, kind: k, title: title || 'Onay', detail, payload: { url }, expectedReturn: expected_return });
     if (a.status === 'rejected') return `REDDEDİLDİ: ${a.result}`;
     return { result: `Onaya gönderildi (${a.id}). Önce denetçi, sonra patron bakacak.`, pending: a.id };
+  },
+
+  async choose_strategy(args, ctx) {
+    return chooseStrategy(args || {}, ctx.agent.name);
   },
 
   async request_budget({ amount, reason = '', expected_return = '' }, ctx) {
