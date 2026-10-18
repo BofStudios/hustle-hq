@@ -161,4 +161,4 @@ OpenRouter (https://openrouter.ai/keys), Gemini (https://aistudio.google.com/api
 
 ---
 
-© 2026 BOF Studios. All rights reserved. See [LICENSE](../LICENSE).
+Open source under the [MIT License](../LICENSE). © 2026 BOF Studios.

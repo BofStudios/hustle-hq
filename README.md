@@ -47,4 +47,4 @@ Data lives in `data/` and agent output in `workspace/` (both git-ignored). API k
 
 ## License
 
-Commercial software. © 2026 BOF Studios. All rights reserved. See [LICENSE](LICENSE).
+Open source under the [MIT License](LICENSE). © 2026 BOF Studios.

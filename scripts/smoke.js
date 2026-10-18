@@ -182,7 +182,7 @@ async function main() {
   ok('Teslim sahibi ödül aldı (gelir + XP)', ownerAfter.stats.revenue === 250 && (ownerAfter.stats.xp || 0) > (ownerBefore.stats.xp || 0), `xp ${ownerBefore.stats.xp || 0}→${ownerAfter.stats.xp}`);
 
   // --- strateji motoru (v1.2): ajanlar para kazanma yolunu kendileri seçer
-  const prof = await postJ('/api/strategy/profile', { skills: 'design, video editing, English', hours: 12, accounts: ['fiverr', 'youtube'], risk: 'low', special20b: true, ibanLabel: 'TR33 0006 1005 1978 6457 8413 26' });
+  const prof = await postJ('/api/strategy/profile', { skills: 'design, video editing, English', hours: 12, accounts: ['fiverr', 'youtube'], risk: 'low', special20b: true, ibanLabel: 'TR00 0000 0000 0000 0000 0000 00' });
   ok('Strateji: profil kaydedildi, tam IBAN saklanmadı', prof.profile?.accounts?.length === 2 && !/\d{8}/.test(prof.profile.ibanLabel) && /\*\*\*\*/.test(prof.profile.ibanLabel), prof.profile?.ibanLabel);
   const chosen = await waitFor(async () => {
     const x = await getJ('/api/strategy');
